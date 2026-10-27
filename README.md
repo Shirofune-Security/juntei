@@ -12,6 +12,7 @@ not event logs.
 | `$MFT` | `parse-mft` | Supported |
 | Prefetch (`*.pf`) | `parse-prefetch` | Supported |
 | USN journal (`$UsnJrnl:$J`) | `parse-usn-journal` | Supported |
+| SRUM (`SRUDB.dat`) | `parse-srum` | Supported |
 | More Windows artifacts | | Planned |
 
 ## Build
@@ -280,6 +281,75 @@ juntei parse-usn-journal -f disk.raw --carve -o carved.csv
 USN journal parsing comes from Yamato Security's
 [ys-usn-journal-parser](https://github.com/Yamato-Security/ys-usn-journal-parser), a maintained fork
 of [sootmark-usn](https://github.com/Sootmark/usn) (MIT OR Apache-2.0).
+
+### `parse-srum`
+
+Parses the System Resource Usage Monitor database (`Windows\System32\sru\SRUDB.dat`): about 30
+days of what every program did, hour by hour, per user: bytes sent and received on which network
+interface, CPU time and disk activity in the foreground and background, network connections,
+energy use and the application timeline. Evidence of exfiltration and of programs that ran, kept
+after they were deleted. SRUM is kept from Windows 8 on; databases of Windows 10, 11 and Windows
+Server 2022 (with its own providers) are tested.
+
+```
+Input:
+  -d, --directory <DIR>  Directory to search recursively for SRUM databases (SRUDB.dat)
+  -f, --file <FILE>      File path to one SRUM database (SRUDB.dat)
+  -r, --software <FILE>  The SOFTWARE hive, for account and Wi-Fi names (default: config/SOFTWARE of the same Windows, or a SOFTWARE next to the database)
+
+Output:
+  -o, --output <PATH>       Save every entry: a directory of CSV tables, or a file (json, jsonl; with -d a directory with one file per database)
+  -t, --output-type <TYPE>  Output type: csv (default), json, jsonl. Without -o, json and jsonl entries are written to stdout
+  -C, --clobber             Overwrite files when saving
+
+Display Settings:
+  -K, --no-color  Disable color output
+  -q, --quiet     Quiet mode: do not display the launch banner
+```
+
+```
+# Entries per table, time range, bytes sent and received, the top senders
+juntei parse-srum -f C/Windows/System32/sru/SRUDB.dat
+
+# Every table as CSV, with account and Wi-Fi names from the SOFTWARE hive
+juntei parse-srum -f SRUDB.dat -r SOFTWARE -o srum-csv
+
+# Every host of a triage collection (each with the SOFTWARE hive of its Windows)
+juntei parse-srum -d triage/ -o srum
+
+# JSON Lines on stdout, for jq
+juntei parse-srum -f SRUDB.dat -t jsonl | jq 'select(.Provider == "NetworkUsages")'
+```
+
+- CSV output is a directory with one table per provider, named as Eric Zimmerman's SrumECmd names
+  them (`NetworkUsages.csv`, `AppResourceUseInfo.csv`, `NetworkConnections.csv`,
+  `AppTimelineProvider.csv`, `vfuprov.csv`, `EnergyUsage.csv` with the long-term table's rows
+  marked by `IsLt`, `PushNotifications.csv`, and on Windows Server `ProcessorTime.csv`,
+  `SizeInBytes.csv`, `TotalUsed.csv`, `NetworkBytes.csv`), a table it doesn't know under its own
+  name, and `SruDbIdMapTable.csv`, the ids the entries refer to. JSON / JSONL have one object per
+  entry with the same columns, after `SourceFile`, `Table` and `Provider`.
+- Every table starts with SrumECmd's columns: `Id`, `Timestamp`, the program (`ExeInfo`, with
+  `!!name!date!…!description` ids split into `ExeInfoDescription` and `ExeTimestamp`), `AppType`
+  (`NormalApp`, `Service`, `ModernApp`, `Object`), the account (`Sid`, `UserName`) and the raw
+  `UserId` and `AppId`. Then the table's own columns as the database names them, FILETIME columns
+  (`ConnectStartTime`, `EndTime`, …) as times, `InterfaceType` after `InterfaceLuid`
+  (`IF_TYPE_IEEE80211`, …) and `ProfileName` after `L2ProfileId`. Times are UTC (RFC 3339);
+  `Timestamp` is rounded to the millisecond as SrumECmd rounds it.
+- Account and Wi-Fi names come from the SOFTWARE hive, read as SrumECmd reads it (`ProfileList`
+  and the `WlanSvc` profiles): `-r`, or found in the same collection (`Windows/System32/config/SOFTWARE`
+  next to `sru/`, or a `SOFTWARE` next to the database). A hive that can't be read is reported and
+  the entries are written without names.
+- With `-d`, files named `SRUDB.dat` (or ending in it) are parsed; `-o` is a directory with one
+  subdirectory of CSV tables (or one JSON / JSONL file) per database, named after its path.
+- A database left dirty (copied from a running system) is read as it is and reported: changes
+  still only in its transaction logs (`SRU*.log`) are missing. Damaged pages and records are
+  reported and skipped.
+
+SRUM parsing comes from Yamato Security's
+[ys-srum-parser](https://github.com/Yamato-Security/ys-srum-parser), a maintained fork of Sootmark's
+[ese](https://github.com/Sootmark/ese) and [srum](https://github.com/Sootmark/srum) crates (MIT OR
+Apache-2.0). On eleven real databases, every column of all 45,255 entries `parse-srum` writes
+equals a decoding written independently from dissect.esedb's values.
 
 ## License
 

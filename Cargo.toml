@@ -33,6 +33,11 @@ serde_json = "1"
 # (MIT OR Apache-2.0), pinned to a commit; its `mft` feature seeds paths from the $MFT with the
 # same ys-mft-parser commit as above.
 usn = { package = "sootmark-usn", git = "https://github.com/Yamato-Security/ys-usn-journal-parser", rev = "dd3f51fce43626d9e39ddc0991edc7b4c5100f22", features = ["mft"] }
+# The order of parse-srum's JSON columns.
+serde = "1"
+# SRUM parsing: Yamato Security's ys-srum-parser, a fork of Sootmark's ese and srum crates
+# (MIT OR Apache-2.0), pinned to a commit.
+srum = { package = "sootmark-srum", git = "https://github.com/Yamato-Security/ys-srum-parser", rev = "451e1d445c635be0b23fad374c0efa2bc1c296ea" }
 termcolor = "1"
 
 [dev-dependencies]
