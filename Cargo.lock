@@ -247,6 +247,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
+name = "crc32fast"
+version = "1.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ba106e844045ddc02c20768ac4b0b7cb45f2cc2ecbd833ac9f5dacb183c2055"
+dependencies = [
+ "cfg-if",
+]
+
+[[package]]
 name = "csv"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -345,6 +354,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
+name = "forensic-rs"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b52fbf6df75a38f126edfb2b6bd8723f53d1af0d6dc09502f608839f0c1ff1a"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "forensicnomicon"
 version = "1.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -367,6 +385,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1af1e5fc4a0cdafce257a88d807f4599b4cf204d6631be87ded01b5c0442d8c5"
 dependencies = [
  "forensicnomicon-core",
+]
+
+[[package]]
+name = "frnsc-prefetch"
+version = "0.14.0"
+source = "git+https://github.com/Yamato-Security/ys-prefetch-parser?rev=ef0ef23f649334981d28b8d76eb1608e6f69fbec#ef0ef23f649334981d28b8d76eb1608e6f69fbec"
+dependencies = [
+ "crc32fast",
+ "forensic-rs",
 ]
 
 [[package]]
@@ -554,6 +581,7 @@ dependencies = [
  "clap",
  "csv",
  "forensicnomicon",
+ "frnsc-prefetch",
  "indicatif",
  "mft",
  "serde_json",

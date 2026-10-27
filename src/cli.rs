@@ -19,6 +19,8 @@ pub struct Cli {
     pub cmd: Commands,
 }
 
+// The variant names are the command names (parse-amcache, parse-mft, ...).
+#[allow(clippy::enum_variant_names)]
 #[derive(Subcommand)]
 pub enum Commands {
     /// Parse Amcache.hve: inventoried executables (with SHA-1), PnP devices and findings
@@ -40,6 +42,16 @@ pub enum Commands {
         disable_version_flag = true
     )]
     ParseMft(MftOptions),
+
+    /// Parse Prefetch files (*.pf): executions with run counts, last run times and loaded files
+    #[command(
+        author = AUTHOR,
+        version = VERSION,
+        help_template = "\nVersion: {version}\n{author-with-newline}\n{usage-heading}\n  juntei parse-prefetch <INPUT> [OPTIONS]\n\n{all-args}",
+        disable_help_flag = true,
+        disable_version_flag = true
+    )]
+    ParsePrefetch(PrefetchOptions),
 }
 
 #[derive(Args, Clone, Debug, Default)]
@@ -245,6 +257,59 @@ impl MftOptions {
     }
 }
 
+/// What `parse-prefetch` writes.
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrefetchOutputType {
+    /// One row per prefetch file (or per execution with -T)
+    Csv,
+    /// One pretty-printed JSON object per prefetch file (or per execution with -T)
+    Json,
+    /// One JSON object per line
+    Jsonl,
+}
+
+#[derive(Args, Clone, Debug, Default)]
+#[clap(group(ArgGroup::new("input").args(["directory", "filepath"]).required(true).multiple(false)))]
+pub struct PrefetchOptions {
+    /// Directory to search recursively for prefetch files (*.pf)
+    #[arg(help_heading = Some("Input"), short = 'd', long, value_name = "DIR", display_order = 100)]
+    pub directory: Option<PathBuf>,
+
+    /// File path to one prefetch file
+    #[arg(help_heading = Some("Input"), short = 'f', long = "file", value_name = "FILE", display_order = 101)]
+    pub filepath: Option<PathBuf>,
+
+    /// One record per execution (the last 8 run times of every file), sorted by time
+    #[arg(help_heading = Some("Records"), short = 'T', long, display_order = 200)]
+    pub timeline: bool,
+
+    /// Save every record to a file
+    #[arg(help_heading = Some("Output"), short = 'o', long, value_name = "FILE", display_order = 300)]
+    pub output: Option<PathBuf>,
+
+    /// Output type: csv (default), json, jsonl. Without -o, the records are written to stdout
+    #[arg(help_heading = Some("Output"), short = 't', long = "output-type", value_name = "TYPE", value_enum, hide_possible_values = true, display_order = 301)]
+    pub output_type: Option<PrefetchOutputType>,
+
+    /// Overwrite files when saving
+    #[arg(help_heading = Some("Output"), short = 'C', long, requires = "output", display_order = 302)]
+    pub clobber: bool,
+
+    #[clap(flatten)]
+    pub common: CommonOptions,
+}
+
+impl PrefetchOptions {
+    pub fn output_type(&self) -> PrefetchOutputType {
+        self.output_type.unwrap_or(PrefetchOutputType::Csv)
+    }
+
+    /// Records on stdout (`-t` without `-o`): nothing but the data may be printed there.
+    pub fn data_on_stdout(&self) -> bool {
+        self.output.is_none() && self.output_type.is_some()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -255,7 +320,7 @@ mod tests {
         argv.extend_from_slice(args);
         match Cli::try_parse_from(argv).unwrap().cmd {
             Commands::ParseAmcache(opts) => opts,
-            Commands::ParseMft(_) => panic!("not parse-amcache"),
+            _ => panic!("not parse-amcache"),
         }
     }
 
@@ -298,7 +363,7 @@ mod tests {
             argv.extend_from_slice(a);
             match Cli::try_parse_from(argv).unwrap().cmd {
                 Commands::ParseMft(o) => o,
-                Commands::ParseAmcache(_) => panic!(),
+                _ => panic!(),
             }
         };
         let o = parse(&["-f", "MFT"]);
@@ -332,5 +397,25 @@ mod tests {
         );
         let o = parse(&["-f", "a", "-t", "text", "-a"]);
         assert_eq!(o.records(), (true, true));
+    }
+
+    #[test]
+    fn prefetch_output_defaults() {
+        let parse = |a: &[&str]| {
+            let mut argv = vec!["juntei", "parse-prefetch"];
+            argv.extend_from_slice(a);
+            match Cli::try_parse_from(argv).unwrap().cmd {
+                Commands::ParsePrefetch(o) => o,
+                _ => panic!(),
+            }
+        };
+        let o = parse(&["-d", "Prefetch"]);
+        assert_eq!(o.output_type(), PrefetchOutputType::Csv);
+        assert!(!o.data_on_stdout());
+        assert!(!o.timeline);
+        assert!(parse(&["-d", "Prefetch", "-t", "csv", "-T"]).data_on_stdout());
+        assert!(!parse(&["-f", "A.pf", "-o", "a.json", "-t", "json"]).data_on_stdout());
+        let argv = ["juntei", "parse-prefetch", "-f", "A.pf", "-C"];
+        assert!(Cli::try_parse_from(argv).is_err(), "-C needs -o");
     }
 }

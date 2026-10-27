@@ -10,7 +10,7 @@ not event logs.
 | --- | --- | --- |
 | Amcache (`Amcache.hve`) | `parse-amcache` | Supported |
 | `$MFT` | `parse-mft` | Supported |
-| Prefetch (`*.pf`) | | Planned |
+| Prefetch (`*.pf`) | `parse-prefetch` | Supported |
 | `$UsnJrnl:$J` | | Planned |
 | More Windows artifacts | | Planned |
 
@@ -155,6 +155,70 @@ juntei parse-mft -f '$MFT' -e resident-streams
 $MFT parsing and the CSV / JSON formats come from Yamato Security's
 [ys-mft-parser](https://github.com/Yamato-Security/ys-mft-parser), a maintained fork of Omer
 Ben-Amram's [mft](https://github.com/omerbenamram/mft) crate (MIT / Apache-2.0).
+
+### `parse-prefetch`
+
+Parses Windows Prefetch files (`C:\Windows\Prefetch\*.pf`) from Windows XP to Windows 11
+(format versions 17, 23, 26, 30 and 31, including the compressed files of Windows 8 and later):
+the executable, how many times it ran, its last eight run times, the volumes, directories and files
+it loaded (with their NTFS file references), and findings.
+
+```
+Input:
+  -d, --directory <DIR>  Directory to search recursively for prefetch files (*.pf)
+  -f, --file <FILE>      File path to one prefetch file
+
+Records:
+  -T, --timeline  One record per execution (the last 8 run times of every file), sorted by time
+
+Output:
+  -o, --output <FILE>       Save every record to a file
+  -t, --output-type <TYPE>  Output type: csv (default), json, jsonl. Without -o, the records are written to stdout
+  -C, --clobber             Overwrite files when saving
+
+Display Settings:
+  -K, --no-color  Disable color output
+  -q, --quiet     Quiet mode: do not display the launch banner
+```
+
+```
+# Summary and high findings on the terminal
+juntei parse-prefetch -d Prefetch/
+
+# One CSV row per prefetch file
+juntei parse-prefetch -d Prefetch/ -o prefetch.csv
+
+# One row per execution, sorted by time, for a timeline
+juntei parse-prefetch -d Prefetch/ -T -o prefetch-timeline.csv
+
+# Every field (volumes, directories, loaded files with file references) as JSON Lines
+juntei parse-prefetch -d Prefetch/ -o prefetch.jsonl -t jsonl
+```
+
+- Without `-o` or `-t`, only the summary is shown. With `-d`, every `*.pf` file under the
+  directory goes into one output; the `SourceFile` column tells them apart.
+- CSV columns: `SourceFile`, `ExecutableName`, `ExecutablePath`, `PrefetchHash`, `FormatVersion`,
+  `RunCount`, `LastRun`, `PreviousRun1`–`PreviousRun7`, `VolumeCount`, `VolumeDevicePaths`,
+  `VolumeSerialNumbers`, `VolumeCreated`, `DirectoryCount`, `FileCount`, `Findings`, `Files`,
+  `Directories` (lists are joined with `, `). With `-T`: `RunTime`, `ExecutableName`,
+  `ExecutablePath`, `PrefetchHash`, `RunCount`, `SourceFile`.
+- Times are UTC (RFC 3339) with the 100 ns precision of the file. Windows keeps the last 8 run
+  times (only the last one before Windows 8); the run count covers every run.
+- `ExecutablePath` is the loaded file with the executable's name. Windows stores at most 29
+  characters of the name, so a longer name is resolved when exactly one loaded file starts with it;
+  otherwise the column holds the name.
+- Findings (following [prefetch-forensic](https://github.com/SecurityRonin/prefetch-forensic)'s
+  audit, with the lists of [forensicnomicon](https://crates.io/crates/forensicnomicon)):
+  `SystemBinaryRelocated` (high, T1036.005), a Windows system binary loaded from outside
+  `System32` / `SysWOW64`; `SuspiciousExecutionPath` (medium, T1204), an executable run from a
+  staging directory such as `Temp`, `Downloads`, `ProgramData` or `Users\Public`. Installers raise
+  the medium one often, so the summary lists only the high findings.
+- Damaged files are reported and skipped; they do not stop the run.
+
+Prefetch parsing comes from Yamato Security's
+[ys-prefetch-parser](https://github.com/Yamato-Security/ys-prefetch-parser), a maintained fork of
+Samuel Garcés Marín's [frnsc-prefetch](https://github.com/ForensicRS/frnsc-prefetch) crate (MIT)
+whose output matches libscca, libyal's reference implementation.
 
 ## License
 

@@ -566,3 +566,214 @@ fn mft_damaged_inputs_do_not_stop_the_run() {
         r.stdout
     );
 }
+
+const PREFETCH_DIR: &str = "test_files/prefetch";
+const PREFETCH_CMD10: &str = "test_files/prefetch/CMD.EXE-6D6290C5.pf";
+
+#[test]
+fn prefetch_summary_on_the_terminal() {
+    let r = run(&["parse-prefetch", "-d", PREFETCH_DIR, "-K"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(r.stdout.contains("Prefetch files: 6"), "{}", r.stdout);
+    assert!(r.stdout.contains("Parsing in progress. Please wait."));
+    assert!(r.stdout.contains("Could not parse "));
+    assert!(r.stdout.contains("SEARCHPROTOCOLHOST.EXE-AFAD3EF9.pf"));
+    assert!(
+        r.stdout
+            .contains("Prefetch files parsed: 5 (could not parse: 1)")
+    );
+    assert!(r.stdout.contains(
+        "Format versions: 30 (Windows 10/11) 2, 26 (Windows 8/8.1) 1, 23 (Windows Vista/7) 1, 17 (Windows XP/2003) 1"
+    ));
+    assert!(r.stdout.contains("Executables: 3"));
+    assert!(r.stdout.contains("Executions (run counts): 11"));
+    assert!(r.stdout.contains(
+        "Run times recorded: 9 (2013-03-10T10:11:49.281250Z - 2024-02-05T06:17:41.144014200Z)"
+    ));
+    assert!(r.stdout.contains("Findings: 1 (medium: 1)"));
+    assert!(r.stdout.contains("To save every record, add -o <FILE>"));
+}
+
+#[test]
+fn prefetch_csv_json_and_jsonl() {
+    let dir = tempfile::tempdir().unwrap();
+    let csv_path = dir.path().join("prefetch.csv");
+    let r = run(&[
+        "parse-prefetch",
+        "-f",
+        PREFETCH_CMD10,
+        "-o",
+        csv_path.to_str().unwrap(),
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(r.stdout.contains("Results saved: "));
+    let mut csv = csv::Reader::from_path(&csv_path).unwrap();
+    let header = csv.headers().unwrap().clone();
+    let rows: Vec<csv::StringRecord> = csv.records().map(|r| r.unwrap()).collect();
+    assert_eq!(rows.len(), 1);
+    let field = |name: &str| rows[0][header.iter().position(|h| h == name).unwrap()].to_string();
+    assert_eq!(field("ExecutableName"), "CMD.EXE");
+    assert_eq!(field("PrefetchHash"), "6D6290C5");
+    assert_eq!(field("FormatVersion"), "30");
+    assert_eq!(field("RunCount"), "4");
+    assert_eq!(field("LastRun"), "2024-02-05T06:17:41.144014200Z");
+    assert_eq!(field("PreviousRun3"), "2024-02-04T04:15:17.060262400Z");
+    assert_eq!(field("PreviousRun4"), "");
+    assert!(field("ExecutablePath").ends_with(r"\WINDOWS\SYSWOW64\CMD.EXE"));
+    assert_eq!(field("FileCount"), "25");
+    assert_eq!(field("Findings"), "");
+
+    // one pretty JSON document per file, with every field
+    let json_path = dir.path().join("prefetch.json");
+    let r = run(&[
+        "parse-prefetch",
+        "-d",
+        PREFETCH_DIR,
+        "-o",
+        json_path.to_str().unwrap(),
+        "-t",
+        "json",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let docs = json_documents(&std::fs::read_to_string(&json_path).unwrap());
+    assert_eq!(docs.len(), 5);
+    let rust_out = docs
+        .iter()
+        .find(|d| d["executable_name"] == "RUST_OUT.EXE")
+        .unwrap();
+    assert_eq!(rust_out["findings"][0]["code"], "SuspiciousExecutionPath");
+    assert_eq!(rust_out["findings"][0]["severity"], "medium");
+    let notepad = docs
+        .iter()
+        .find(|d| d["executable_name"] == "NOTEPAD.EXE")
+        .unwrap();
+    assert_eq!(notepad["windows_version"], "Windows Vista/7");
+    assert!(
+        notepad["files"][0]["mft_entry"].is_u64(),
+        "version 23 has file references"
+    );
+    assert!(
+        !notepad["volumes"][0]["directories"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    // JSON Lines on stdout: only the data
+    let r = run(&["parse-prefetch", "-f", PREFETCH_CMD10, "-t", "jsonl"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let lines: Vec<&str> = r.stdout.lines().collect();
+    assert_eq!(lines.len(), 1, "{}", r.stdout);
+    let doc: Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(doc["last_run_times"].as_array().unwrap().len(), 4);
+}
+
+#[test]
+fn prefetch_timeline_is_one_record_per_execution_sorted_by_time() {
+    let r = run(&["parse-prefetch", "-d", PREFETCH_DIR, "-T", "-t", "csv"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(r.stderr.contains("Could not parse "), "errors go to stderr");
+    let mut csv = csv::Reader::from_reader(r.stdout.as_bytes());
+    assert_eq!(
+        csv.headers().unwrap().iter().collect::<Vec<_>>(),
+        [
+            "RunTime",
+            "ExecutableName",
+            "ExecutablePath",
+            "PrefetchHash",
+            "RunCount",
+            "SourceFile"
+        ]
+    );
+    let times: Vec<String> = csv.records().map(|r| r.unwrap()[0].to_string()).collect();
+    assert_eq!(times.len(), 9);
+    let mut sorted = times.clone();
+    sorted.sort();
+    assert_eq!(times, sorted);
+    assert_eq!(times[0], "2013-03-10T10:11:49.281250Z");
+}
+
+/// A Windows 7 prefetch file of NOTEPAD.EXE turned into one of SVCHOST.EXE loaded from outside
+/// System32 (the names have the same length, so every offset stays valid).
+#[test]
+fn prefetch_system_binary_outside_system32_is_a_high_finding() {
+    fn utf16(s: &str) -> Vec<u8> {
+        s.encode_utf16().flat_map(u16::to_le_bytes).collect()
+    }
+    fn replace_all(data: &mut [u8], from: &[u8], to: &[u8]) {
+        let mut i = 0;
+        while i + from.len() <= data.len() {
+            if &data[i..i + from.len()] == from {
+                data[i..i + from.len()].copy_from_slice(to);
+                i += from.len();
+            } else {
+                i += 1;
+            }
+        }
+    }
+    let mut data = std::fs::read(repo("test_files/prefetch/NOTEPAD.EXE-D8414F97.pf")).unwrap();
+    replace_all(
+        &mut data,
+        &utf16(r"SYSTEM32\NOTEPAD.EXE"),
+        &utf16(r"TEMPDIR1\SVCHOST.EXE"),
+    );
+    replace_all(&mut data, &utf16("NOTEPAD.EXE"), &utf16("SVCHOST.EXE"));
+    let dir = tempfile::tempdir().unwrap();
+    let pf = dir.path().join("SVCHOST.EXE-D8414F97.pf");
+    std::fs::write(&pf, data).unwrap();
+
+    let r = run(&["parse-prefetch", "-f", pf.to_str().unwrap(), "-K"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(r.stdout.contains("Findings: 1 (high: 1)"), "{}", r.stdout);
+    assert!(r.stdout.contains(
+        r"[HIGH] SVCHOST.EXE is a Windows system binary but was loaded from \DEVICE\HARDDISKVOLUME2\WINDOWS\TEMPDIR1\SVCHOST.EXE"
+    ), "{}", r.stdout);
+    assert!(r.stdout.contains("(T1036.005)"));
+}
+
+#[test]
+fn prefetch_input_and_output_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let r = run(&["parse-prefetch", "-d", dir.path().to_str().unwrap(), "-K"]);
+    assert_eq!(r.code, 1);
+    assert!(
+        r.stdout.contains("No prefetch files (*.pf) were found"),
+        "{}",
+        r.stdout
+    );
+
+    let r = run(&[
+        "parse-prefetch",
+        "-f",
+        "test_files/prefetch/corrupt/SEARCHPROTOCOLHOST.EXE-AFAD3EF9.pf",
+        "-K",
+    ]);
+    assert_eq!(r.code, 1, "nothing was parsed");
+    assert!(
+        r.stdout
+            .contains("Prefetch files parsed: 0 (could not parse: 1)")
+    );
+
+    let out = dir.path().join("exists.csv");
+    std::fs::write(&out, b"x").unwrap();
+    let r = run(&[
+        "parse-prefetch",
+        "-f",
+        PREFETCH_CMD10,
+        "-o",
+        out.to_str().unwrap(),
+        "-K",
+    ]);
+    assert_eq!(r.code, 1);
+    assert!(r.stdout.contains("The output file already exists"));
+    let r = run(&[
+        "parse-prefetch",
+        "-f",
+        PREFETCH_CMD10,
+        "-o",
+        out.to_str().unwrap(),
+        "-C",
+        "-K",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+}

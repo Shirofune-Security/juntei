@@ -326,28 +326,7 @@ pub fn is_amcache_name(name: &str) -> bool {
 /// The Amcache hives under `dir`, recursively, in path order. Symlinked directories are not
 /// followed (a link loop would never end).
 pub fn find_hives(dir: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(d) = stack.pop() {
-        let Ok(entries) = d.read_dir() else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let Ok(kind) = entry.file_type() else {
-                continue;
-            };
-            let path = entry.path();
-            if kind.is_dir() {
-                stack.push(path);
-            } else if (kind.is_file() || (kind.is_symlink() && path.is_file()))
-                && is_amcache_name(&entry.file_name().to_string_lossy())
-            {
-                out.push(path);
-            }
-        }
-    }
-    out.sort();
-    out
+    util::find_files(dir, is_amcache_name)
 }
 
 #[cfg(test)]
