@@ -3,7 +3,7 @@
 use crate::color::JunteiColor;
 use std::collections::HashSet;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use termcolor::{BufferWriter, Color, ColorChoice, ColorSpec, WriteColor};
 
 /// Print `msg` to stdout in `color` (or the default color when `None`).
@@ -100,9 +100,80 @@ pub fn unique_name(root: &Path, input: &Path, used: &mut HashSet<String>) -> Str
     candidate
 }
 
+/// Refuse to overwrite existing results without `-C`.
+pub fn check_output(out: &Path, is_dir: bool, clobber: bool) -> Result<(), String> {
+    let exists = || {
+        format!(
+            "The output file already exists: {}. Please specify a different filename or add the -C, --clobber option to overwrite.",
+            out.display()
+        )
+    };
+    if is_dir {
+        if out.is_file() {
+            return Err(format!("{} is a file, not a directory.", out.display()));
+        }
+        let non_empty = out
+            .read_dir()
+            .map(|mut e| e.next().is_some())
+            .unwrap_or(false);
+        if non_empty && !clobber {
+            return Err(exists());
+        }
+    } else if out.is_dir() {
+        return Err(format!("{} is a directory.", out.display()));
+    } else if out.exists() && !clobber {
+        return Err(exists());
+    }
+    Ok(())
+}
+
+/// The files under `dir` whose name `is_match` accepts, recursively, in path order. Symlinked
+/// directories are not followed (a link loop would never end).
+pub fn find_files(dir: &Path, is_match: fn(&str) -> bool) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(entries) = d.read_dir() else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            let path = entry.path();
+            if kind.is_dir() {
+                stack.push(path);
+            } else if (kind.is_file() || (kind.is_symlink() && path.is_file()))
+                && is_match(&entry.file_name().to_string_lossy())
+            {
+                out.push(path);
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn existing_outputs_need_clobber() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("out.csv");
+        assert!(check_output(&file, false, false).is_ok());
+        std::fs::write(&file, b"x").unwrap();
+        assert!(check_output(&file, false, false).is_err());
+        assert!(check_output(&file, false, true).is_ok());
+        assert!(
+            check_output(&file, true, true).is_err(),
+            "a file is not a directory"
+        );
+        assert!(check_output(dir.path(), false, true).is_err());
+        assert!(check_output(dir.path(), true, false).is_err());
+        assert!(check_output(dir.path(), true, true).is_ok());
+    }
 
     #[test]
     fn output_names_follow_the_input_path_and_are_never_shared() {

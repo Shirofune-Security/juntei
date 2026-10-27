@@ -6,7 +6,7 @@
 use crate::cli::{MftOptions, MftOutputType};
 use crate::color::JunteiColor;
 use crate::progress;
-use crate::util::{self, error_msg, fmt_num, p, p_label};
+use crate::util::{self, check_output, error_msg, fmt_num, p, p_label};
 use indicatif::ProgressBar;
 use mft::attribute::MftAttributeType;
 use mft::csv::FlatMftEntryWithName;
@@ -462,33 +462,6 @@ fn file_len(path: &Path) -> u64 {
     path.metadata().map_or(0, |m| m.len())
 }
 
-/// Refuse to overwrite existing results without `-C`.
-fn check_output(out: &Path, is_dir: bool, clobber: bool) -> Result<(), String> {
-    let exists = || {
-        format!(
-            "The output file already exists: {}. Please specify a different filename or add the -C, --clobber option to overwrite.",
-            out.display()
-        )
-    };
-    if is_dir {
-        if out.is_file() {
-            return Err(format!("{} is a file, not a directory.", out.display()));
-        }
-        let non_empty = out
-            .read_dir()
-            .map(|mut e| e.next().is_some())
-            .unwrap_or(false);
-        if non_empty && !clobber {
-            return Err(exists());
-        }
-    } else if out.is_dir() {
-        return Err(format!("{} is a directory.", out.display()));
-    } else if out.exists() && !clobber {
-        return Err(exists());
-    }
-    Ok(())
-}
-
 /// Whether a file name is an $MFT: `$MFT`, or a name ending in `$MFT` (`C_$MFT`).
 pub fn is_mft_name(name: &str) -> bool {
     name.to_ascii_lowercase().ends_with("$mft")
@@ -496,28 +469,7 @@ pub fn is_mft_name(name: &str) -> bool {
 
 /// The $MFT files under `dir`, recursively, in path order (symlinked directories are not followed).
 pub fn find_mfts(dir: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(d) = stack.pop() {
-        let Ok(entries) = d.read_dir() else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let Ok(kind) = entry.file_type() else {
-                continue;
-            };
-            let path = entry.path();
-            if kind.is_dir() {
-                stack.push(path);
-            } else if (kind.is_file() || (kind.is_symlink() && path.is_file()))
-                && is_mft_name(&entry.file_name().to_string_lossy())
-            {
-                out.push(path);
-            }
-        }
-    }
-    out.sort();
-    out
+    util::find_files(dir, is_mft_name)
 }
 
 #[cfg(test)]
@@ -537,22 +489,5 @@ mod tests {
         assert_eq!(safe_file_name("abcdef", 3), "abc");
         // the name goes on after the component, so a trailing dot or space is kept
         assert_eq!(safe_file_name("trail. ", 100), "trail. ");
-    }
-
-    #[test]
-    fn existing_outputs_need_clobber() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("out.csv");
-        assert!(check_output(&file, false, false).is_ok());
-        std::fs::write(&file, b"x").unwrap();
-        assert!(check_output(&file, false, false).is_err());
-        assert!(check_output(&file, false, true).is_ok());
-        assert!(
-            check_output(&file, true, true).is_err(),
-            "a file is not a directory"
-        );
-        assert!(check_output(dir.path(), false, true).is_err());
-        assert!(check_output(dir.path(), true, false).is_err());
-        assert!(check_output(dir.path(), true, true).is_ok());
     }
 }
