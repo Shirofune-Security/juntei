@@ -343,7 +343,7 @@ fn input_and_output_errors() {
 
 const MFT: &str = "test_files/mft/MFT";
 
-/// FullPath with `/` separators (the crate joins paths with the platform separator).
+/// (EntryId, FullPath) of every CSV row (paths use `/` on every OS).
 fn full_paths(csv_text: &str) -> Vec<(String, String)> {
     let mut rdr = csv::Reader::from_reader(csv_text.as_bytes());
     let headers = rdr.headers().unwrap().clone();
@@ -352,7 +352,7 @@ fn full_paths(csv_text: &str) -> Vec<(String, String)> {
     rdr.records()
         .map(|r| {
             let r = r.unwrap();
-            (r[id].to_string(), r[path].replace('\\', "/"))
+            (r[id].to_string(), r[path].to_string())
         })
         .collect()
 }
@@ -499,7 +499,7 @@ fn mft_resident_streams_and_directory_mode() {
 #[test]
 fn mft_damaged_inputs_do_not_stop_the_run() {
     let dir = tempfile::tempdir().unwrap();
-    // two directories that name each other as parent: the crate's own path lookup overflows the stack
+    // two directories that name each other as parent (the upstream crate overflows the stack)
     let mut data = std::fs::read(repo(MFT)).unwrap();
     let mut dirs: Vec<(usize, Vec<usize>)> = Vec::new();
     for i in 16..data.len() / 1024 {
@@ -551,7 +551,7 @@ fn mft_damaged_inputs_do_not_stop_the_run() {
         r.stdout
     );
     assert!(
-        r.stdout.contains("the first entry is not a FILE record"),
+        r.stdout.contains("no valid FILE record header was found"),
         "{}",
         r.stdout
     );
@@ -560,7 +560,8 @@ fn mft_damaged_inputs_do_not_stop_the_run() {
     let r = run(&["parse-mft", "-f", "README.md", "-K", "-q"]);
     assert_eq!(r.code, 1);
     assert!(
-        r.stdout.contains("Could not parse README.md: not an $MFT"),
+        r.stdout
+            .contains("Could not parse README.md: Failed to determine the entry size"),
         "{}",
         r.stdout
     );

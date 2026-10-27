@@ -145,13 +145,16 @@ juntei parse-mft -f '$MFT' -e resident-streams
   `mft_dump`); JSON / JSONL have every attribute of every entry.
 - With `-d`, files named `$MFT` (or ending in `$MFT`) are parsed; `-o` is a directory with one
   file per `$MFT`, named after its path (`HOST1/C/$MFT` → `HOST1_C__MFT.csv`).
-- Extracted streams are named `<entry>-<sequence>_<full path>_<stream number>_<stream name>.dontrun`;
+- Full paths use `/`. A file whose parent directory's record was reused is `[Orphaned]`; a deleted
+  file in a deleted directory keeps its path; an unresolvable parent is `[Unknown]`.
+- Extracted streams are named `<full path>__<entry>-<sequence>_<stream number>_<stream name>.dontrun`;
   characters that are unsafe in file names become `_`. They are evidence: do not run them.
-- Damaged or crafted records: a file whose first record is unusable is skipped, a parent reference
-  that loops gives an `[Unknown]` path instead of a crash, and unreadable entries are counted.
+- Damaged or crafted records do not crash the run: a file without a usable FILE record header is
+  skipped, a parent-reference loop gives an `[Unknown]` path, and unreadable entries are counted.
 
-$MFT parsing and the CSV / JSON formats come from Omer Ben-Amram's
-[mft](https://github.com/omerbenamram/mft) crate (MIT / Apache-2.0).
+$MFT parsing and the CSV / JSON formats come from Yamato Security's
+[ys-mft-parser](https://github.com/Yamato-Security/ys-mft-parser), a maintained fork of Omer
+Ben-Amram's [mft](https://github.com/omerbenamram/mft) crate (MIT / Apache-2.0).
 
 ## License
 
