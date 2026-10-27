@@ -1,0 +1,33 @@
+[package]
+name = "juntei"
+version = "0.1.0"
+repository = "https://github.com/Yamato-Security/juntei"
+authors = ["Yamato Security @SecurityYamato"]
+description = "Windows forensics artifact parser"
+license = "AGPL-3.0-only"
+edition = "2024"
+rust-version = "1.88"
+include = ["src/**/*", "art/**/*", "LICENSE", "README.md", "CHANGELOG.md"]
+
+# Every dependency has an explicit floor rather than "*": a wildcard accepts any future
+# release, including a breaking one, on the next `cargo update`.
+[dependencies]
+# Amcache parsing and output: Yamato Security's ys-amcache-parser (Apache-2.0), pinned to a commit.
+amcache-forensic = { git = "https://github.com/Yamato-Security/ys-amcache-parser", rev = "3bfc944a9b5c4c46b94bda12ca6b9af9f83c255a" }
+bytesize = "2"
+# The Observation trait gives the severity of an Amcache finding.
+forensicnomicon = "1"
+chrono = { version = "0.4", features = ["clock"] }
+clap = { version = "4.5", features = ["derive"] }
+indicatif = "0.18"
+termcolor = "1"
+
+[dev-dependencies]
+csv = "1"
+serde_json = "1"
+tempfile = "3"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = "debuginfo"

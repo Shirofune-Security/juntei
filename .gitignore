@@ -1,0 +1,9 @@
+/target
+*.csv
+*.json
+*.jsonl
+!test_files/**
+.DS_Store
+.idea/
+.vscode/
+/.claude/
