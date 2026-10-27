@@ -1,6 +1,7 @@
 //! Small shared helpers: colored printing and number / size formatting.
 
 use crate::color::JunteiColor;
+use std::collections::HashSet;
 use std::io::Write;
 use std::path::Path;
 use termcolor::{BufferWriter, Color, ColorChoice, ColorSpec, WriteColor};
@@ -63,9 +64,72 @@ pub fn file_size_display(path: &Path) -> String {
         .map_or_else(|_| "-".to_string(), |m| size_display(m.len()))
 }
 
+/// The output name of one file found with `-d`: its path under the input directory without the
+/// extension, with `_` for separators and unsafe characters
+/// (`HOST1/C/Windows/AppCompat/Programs/Amcache.hve` → `HOST1_C_Windows_AppCompat_Programs_Amcache`),
+/// numbered when two files would share it.
+pub fn unique_name(root: &Path, input: &Path, used: &mut HashSet<String>) -> String {
+    let relative = input.strip_prefix(root).unwrap_or(input);
+    let relative = relative.with_extension("");
+    let parts: Vec<String> = relative
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().to_string())
+        .collect();
+    let name: String = parts
+        .join("_")
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let name = if name.is_empty() {
+        "output".to_string()
+    } else {
+        name
+    };
+    let mut candidate = name.clone();
+    let mut n = 1;
+    while !used.insert(candidate.clone()) {
+        n += 1;
+        candidate = format!("{name}_{n}");
+    }
+    candidate
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn output_names_follow_the_input_path_and_are_never_shared() {
+        let root = Path::new("triage");
+        let mut used = HashSet::new();
+        assert_eq!(
+            unique_name(
+                root,
+                &root.join("HOST1/C/Windows/AppCompat/Programs/Amcache.hve"),
+                &mut used
+            ),
+            "HOST1_C_Windows_AppCompat_Programs_Amcache"
+        );
+        assert_eq!(
+            unique_name(root, &root.join("Amcache.hve"), &mut used),
+            "Amcache"
+        );
+        assert_eq!(
+            unique_name(root, &root.join("a b/Amcache.hve"), &mut used),
+            "a_b_Amcache"
+        );
+        // `a_b/Amcache.hve` sanitizes to the same name
+        assert_eq!(
+            unique_name(root, &root.join("a_b/Amcache.hve"), &mut used),
+            "a_b_Amcache_2"
+        );
+    }
 
     #[test]
     fn numbers_get_thousands_separators() {

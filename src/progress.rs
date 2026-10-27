@@ -8,9 +8,13 @@ use std::path::Path;
 use std::time::Duration;
 
 pub fn progress_bar(len: usize, no_color: bool) -> ProgressBar {
-    let bar =
-        ProgressBar::with_draw_target(Some(len as u64), ProgressDrawTarget::stdout_with_hz(10))
-            .with_tab_width(55);
+    progress_bar_with_len(len as u64, no_color)
+}
+
+/// The same bar for a count that is not files (the entries of an $MFT).
+pub fn progress_bar_with_len(len: u64, no_color: bool) -> ProgressBar {
+    let bar = ProgressBar::with_draw_target(Some(len), ProgressDrawTarget::stdout_with_hz(10))
+        .with_tab_width(55);
     bar.set_style(
         ProgressStyle::with_template(&template(no_color))
             .unwrap_or_else(|_| ProgressStyle::default_bar())

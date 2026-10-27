@@ -3,6 +3,7 @@
 mod amcache;
 mod cli;
 mod color;
+mod mft;
 mod progress;
 mod util;
 
@@ -34,6 +35,17 @@ fn main() {
                 display_logo(opts.common.quiet, opts.common.no_color, true, false);
             }
             let code = amcache::run(opts);
+            if !data_only {
+                print_elapsed(start, opts.common.no_color);
+            }
+            code
+        }
+        Commands::ParseMft(opts) => {
+            let data_only = opts.data_on_stdout();
+            if !data_only {
+                display_logo(opts.common.quiet, opts.common.no_color, true, false);
+            }
+            let code = mft::run(opts);
             if !data_only {
                 print_elapsed(start, opts.common.no_color);
             }

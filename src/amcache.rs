@@ -138,7 +138,7 @@ pub fn run(opts: &AmcacheOptions) -> i32 {
             (OutputType::Csv, _) => {
                 let out = opts.output.as_deref().unwrap_or(Path::new("."));
                 let dir = match root {
-                    Some(root) => out.join(unique_dir_name(root, hive, &mut used_dirs)),
+                    Some(root) => out.join(util::unique_name(root, hive, &mut used_dirs)),
                     None => out.to_path_buf(),
                 };
                 write_csv_directory(&dir, &source, &report, options).map(|mut paths| {
@@ -350,41 +350,6 @@ pub fn find_hives(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// The CSV subdirectory of one hive found with `-d`: its path under the input directory with
-/// `_` for separators and unsafe characters (`HOST1/C/Windows/AppCompat/Programs/Amcache.hve` →
-/// `HOST1_C_Windows_AppCompat_Programs_Amcache`), numbered when two hives would share it.
-fn unique_dir_name(root: &Path, hive: &Path, used: &mut HashSet<String>) -> String {
-    let relative = hive.strip_prefix(root).unwrap_or(hive);
-    let relative = relative.with_extension("");
-    let parts: Vec<String> = relative
-        .components()
-        .map(|c| c.as_os_str().to_string_lossy().to_string())
-        .collect();
-    let name: String = parts
-        .join("_")
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    let name = if name.is_empty() {
-        "Amcache".to_string()
-    } else {
-        name
-    };
-    let mut candidate = name.clone();
-    let mut n = 1;
-    while !used.insert(candidate.clone()) {
-        n += 1;
-        candidate = format!("{name}_{n}");
-    }
-    candidate
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -429,33 +394,6 @@ mod tests {
                 "a/Amcache.hve",
                 "b/C/Windows/AppCompat/Programs/Amcache.hve"
             ]
-        );
-    }
-
-    #[test]
-    fn csv_directories_are_named_after_the_hive_path_and_never_shared() {
-        let root = Path::new("triage");
-        let mut used = HashSet::new();
-        assert_eq!(
-            unique_dir_name(
-                root,
-                &root.join("HOST1/C/Windows/AppCompat/Programs/Amcache.hve"),
-                &mut used
-            ),
-            "HOST1_C_Windows_AppCompat_Programs_Amcache"
-        );
-        assert_eq!(
-            unique_dir_name(root, &root.join("Amcache.hve"), &mut used),
-            "Amcache"
-        );
-        assert_eq!(
-            unique_dir_name(root, &root.join("a b/Amcache.hve"), &mut used),
-            "a_b_Amcache"
-        );
-        // `a_b/Amcache.hve` sanitizes to the same name
-        assert_eq!(
-            unique_dir_name(root, &root.join("a_b/Amcache.hve"), &mut used),
-            "a_b_Amcache_2"
         );
     }
 
