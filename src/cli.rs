@@ -52,6 +52,16 @@ pub enum Commands {
         disable_version_flag = true
     )]
     ParsePrefetch(PrefetchOptions),
+
+    /// Parse the USN journal ($UsnJrnl:$J): every file change with its reasons and the path it had
+    #[command(
+        author = AUTHOR,
+        version = VERSION,
+        help_template = "\nVersion: {version}\n{author-with-newline}\n{usage-heading}\n  juntei parse-usn-journal <INPUT> [OPTIONS]\n\n{all-args}",
+        disable_help_flag = true,
+        disable_version_flag = true
+    )]
+    ParseUsnJournal(UsnJournalOptions),
 }
 
 #[derive(Args, Clone, Debug, Default)]
@@ -310,6 +320,73 @@ impl PrefetchOptions {
     }
 }
 
+/// What `parse-usn-journal` writes.
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UsnOutputType {
+    /// One row per record (MFTECmd's $J columns and more)
+    Csv,
+    /// One pretty-printed JSON object per record (range-tracking records included)
+    Json,
+    /// One JSON object per line
+    Jsonl,
+}
+
+impl UsnOutputType {
+    pub fn extension(&self) -> &'static str {
+        match self {
+            UsnOutputType::Csv => "csv",
+            UsnOutputType::Json => "json",
+            UsnOutputType::Jsonl => "jsonl",
+        }
+    }
+}
+
+#[derive(Args, Clone, Debug, Default)]
+#[clap(group(ArgGroup::new("input").args(["directory", "filepath"]).required(true).multiple(false)))]
+pub struct UsnJournalOptions {
+    /// Directory to search recursively for USN journals ($J)
+    #[arg(help_heading = Some("Input"), short = 'd', long, value_name = "DIR", display_order = 100)]
+    pub directory: Option<PathBuf>,
+
+    /// File path to one USN journal ($J), or with --carve any file
+    #[arg(help_heading = Some("Input"), short = 'f', long = "file", value_name = "FILE", display_order = 101)]
+    pub filepath: Option<PathBuf>,
+
+    /// The volume's $MFT, for paths (default: the $MFT next to the journal's $Extend directory)
+    #[arg(help_heading = Some("Input"), short = 'm', long = "mft", value_name = "FILE", conflicts_with = "directory", display_order = 102)]
+    pub mft: Option<PathBuf>,
+
+    /// Carve records out of a disk image, unallocated space or any other file that is not a journal
+    #[arg(help_heading = Some("Input"), long, conflicts_with = "directory", display_order = 103)]
+    pub carve: bool,
+
+    /// Save every record to a file (with -d: a directory with one file per journal)
+    #[arg(help_heading = Some("Output"), short = 'o', long, value_name = "PATH", display_order = 300)]
+    pub output: Option<PathBuf>,
+
+    /// Output type: csv (default), json, jsonl. Without -o, the records are written to stdout
+    #[arg(help_heading = Some("Output"), short = 't', long = "output-type", value_name = "TYPE", value_enum, hide_possible_values = true, display_order = 301)]
+    pub output_type: Option<UsnOutputType>,
+
+    /// Overwrite files when saving
+    #[arg(help_heading = Some("Output"), short = 'C', long, display_order = 302)]
+    pub clobber: bool,
+
+    #[clap(flatten)]
+    pub common: CommonOptions,
+}
+
+impl UsnJournalOptions {
+    pub fn output_type(&self) -> UsnOutputType {
+        self.output_type.unwrap_or(UsnOutputType::Csv)
+    }
+
+    /// Records on stdout (`-t` without `-o`): nothing but the data may be printed there.
+    pub fn data_on_stdout(&self) -> bool {
+        self.output.is_none() && self.output_type.is_some()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -417,5 +494,34 @@ mod tests {
         assert!(!parse(&["-f", "A.pf", "-o", "a.json", "-t", "json"]).data_on_stdout());
         let argv = ["juntei", "parse-prefetch", "-f", "A.pf", "-C"];
         assert!(Cli::try_parse_from(argv).is_err(), "-C needs -o");
+    }
+
+    #[test]
+    fn usn_journal_options() {
+        let parse = |a: &[&str]| {
+            let mut argv = vec!["juntei", "parse-usn-journal"];
+            argv.extend_from_slice(a);
+            Cli::try_parse_from(argv).map(|c| match c.cmd {
+                Commands::ParseUsnJournal(o) => o,
+                _ => panic!(),
+            })
+        };
+        let o = parse(&["-f", "$J"]).unwrap();
+        assert_eq!(o.output_type(), UsnOutputType::Csv);
+        assert!(!o.data_on_stdout());
+        assert!(
+            parse(&["-f", "$J", "-t", "jsonl"])
+                .unwrap()
+                .data_on_stdout()
+        );
+        assert!(parse(&["-f", "$J", "-m", "$MFT", "--carve"]).is_ok());
+        assert!(
+            parse(&["-d", "triage", "-m", "$MFT"]).is_err(),
+            "-m needs -f"
+        );
+        assert!(
+            parse(&["-d", "triage", "--carve"]).is_err(),
+            "--carve needs -f"
+        );
     }
 }

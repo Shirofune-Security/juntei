@@ -11,7 +11,7 @@ not event logs.
 | Amcache (`Amcache.hve`) | `parse-amcache` | Supported |
 | `$MFT` | `parse-mft` | Supported |
 | Prefetch (`*.pf`) | `parse-prefetch` | Supported |
-| `$UsnJrnl:$J` | | Planned |
+| USN journal (`$UsnJrnl:$J`) | `parse-usn-journal` | Supported |
 | More Windows artifacts | | Planned |
 
 ## Build
@@ -219,6 +219,67 @@ Prefetch parsing comes from Yamato Security's
 [ys-prefetch-parser](https://github.com/Yamato-Security/ys-prefetch-parser), a maintained fork of
 Samuel Garcés Marín's [frnsc-prefetch](https://github.com/ForensicRS/frnsc-prefetch) crate (MIT)
 whose output matches libscca, libyal's reference implementation.
+
+### `parse-usn-journal`
+
+Parses the NTFS USN change journal (`$Extend\$UsnJrnl:$J`): every change Windows recorded to every
+file of a volume (created, written, renamed, deleted, …), with the full path its directory had *at
+the time of the record*. Records of format versions 2 and 3 (and the range-tracking version 4 in
+JSON) are read straight through the gigabytes of sparse zeros a collected `$J` starts with.
+
+```
+Input:
+  -d, --directory <DIR>  Directory to search recursively for USN journals ($J)
+  -f, --file <FILE>      File path to one USN journal ($J), or with --carve any file
+  -m, --mft <FILE>       The volume's $MFT, for paths (default: the $MFT next to the journal's $Extend directory)
+      --carve            Carve records out of a disk image, unallocated space or any other file that is not a journal
+
+Output:
+  -o, --output <PATH>       Save every record to a file (with -d: a directory with one file per journal)
+  -t, --output-type <TYPE>  Output type: csv (default), json, jsonl. Without -o, the records are written to stdout
+  -C, --clobber             Overwrite files when saving
+
+Display Settings:
+  -K, --no-color  Disable color output
+  -q, --quiet     Quiet mode: do not display the launch banner
+```
+
+```
+# Record counts, time range, creates / deletes / renames and damage on the terminal
+juntei parse-usn-journal -f 'C/$Extend/$J'
+
+# Every record as CSV, with paths from the volume's $MFT
+juntei parse-usn-journal -f 'C/$Extend/$J' -m 'C/$MFT' -o usnjrnl.csv
+
+# Every journal of a triage collection (each with the $MFT of its volume), one JSONL file each
+juntei parse-usn-journal -d triage/ -o usn-jsonl -t jsonl
+
+# Records that survive in a disk image or unallocated space
+juntei parse-usn-journal -f disk.raw --carve -o carved.csv
+```
+
+- CSV has MFTECmd's `$J` columns, in its order (`Name`, `Extension`, `EntryNumber`, `SequenceNumber`,
+  `ParentEntryNumber`, `ParentSequenceNumber`, `ParentPath`, `UpdateSequenceNumber`,
+  `UpdateTimestamp`, `UpdateReasons`, `FileAttributes`, `OffsetToData`, `SourceFile`), then
+  `SourceInfo`, `SecurityId` and `Version`. Reasons and attributes use Windows' names joined with `|`
+  (`FILE_CREATE|CLOSE`), unknown bits in hex. JSON / JSONL have every field, and the range-tracking
+  (V4) records with their extents.
+- Paths are rewound: the journal is read twice, once to learn every directory's renames, moves,
+  creations and deletions, once to give each record the path its directory had then. With the
+  volume's `$MFT` (`-m`, or found next to the journal's `$Extend` directory in KAPE-style layouts),
+  directories the journal does not name are known too. A directory nobody knows shows as
+  `[Unknown <entry>-<sequence>]`. On six real journals, the paths equal MFTECmd's `ParentPath`
+  wherever MFTECmd resolves one, and 4,321 records MFTECmd leaves as `PathUnknown` are resolved.
+- With `-d`, files named `$J` (or ending in `$J`) are parsed; `-o` is a directory with one file per
+  journal, named after its path (`HOST1/C/$Extend/$J` → `HOST1_C__Extend__J.csv`).
+- `--carve` reads any file 8 bytes at a time and keeps only records laid out exactly as NTFS writes
+  them (no false positives in 880 MB of `$MFT` data); `OffsetToData` is the offset in that file.
+  Paths come from the `$MFT` given with `-m`, as it is now.
+- Damaged data (bytes that are not records, a record cut off at the end) is reported and skipped.
+
+USN journal parsing comes from Yamato Security's
+[ys-usn-journal-parser](https://github.com/Yamato-Security/ys-usn-journal-parser), a maintained fork
+of [sootmark-usn](https://github.com/Sootmark/usn) (MIT OR Apache-2.0).
 
 ## License
 

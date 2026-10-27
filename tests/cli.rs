@@ -777,3 +777,283 @@ fn prefetch_input_and_output_errors() {
     ]);
     assert_eq!(r.code, 0, "{}", r.stderr);
 }
+
+const USN_SLICE: &str = "test_files/usn/win11_rathbunvm_$J";
+
+/// A `USN_RECORD_V2` at `usn` (also its offset), for MFT entry `file` in directory `parent`.
+fn usn_v2(
+    usn: u64,
+    file: (u64, u16),
+    parent: (u64, u16),
+    reasons: u32,
+    attributes: u32,
+    name: &str,
+) -> Vec<u8> {
+    let reference =
+        |(entry, sequence): (u64, u16)| (u64::from(sequence) << 48 | entry).to_le_bytes();
+    let name: Vec<u8> = name.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    let mut r = vec![0; 4];
+    r.extend(2_u16.to_le_bytes());
+    r.extend(0_u16.to_le_bytes());
+    r.extend(reference(file));
+    r.extend(reference(parent));
+    r.extend(usn.to_le_bytes());
+    r.extend(133_537_680_000_000_000_u64.to_le_bytes()); // 2024-03-01T12:00:00Z
+    r.extend(reasons.to_le_bytes());
+    r.extend(0_u32.to_le_bytes());
+    r.extend(0_u32.to_le_bytes());
+    r.extend(attributes.to_le_bytes());
+    r.extend((name.len() as u16).to_le_bytes());
+    r.extend(60_u16.to_le_bytes());
+    r.extend(name);
+    r.resize(r.len().next_multiple_of(8), 0);
+    let length = (r.len() as u32).to_le_bytes();
+    r[..4].copy_from_slice(&length);
+    r
+}
+
+const DIRECTORY: u32 = 0x10;
+const ARCHIVE: u32 = 0x20;
+const CREATE: u32 = 0x100;
+const DELETE: u32 = 0x200;
+const OLD_NAME: u32 = 0x1000;
+const NEW_NAME: u32 = 0x2000;
+const CLOSE: u32 = 0x8000_0000;
+
+/// A journal for the volume of `test_files/mft/MFT` (where entry 36 is
+/// `WINDOWS/system32/spool/drivers/w32x86`, 37 its subdirectory `3`, 30
+/// `WINDOWS/system32/config`): a file in a directory the MFT knows, a directory
+/// renamed to the name the MFT has, a directory created and deleted, a parent nobody
+/// knows, and a range-tracking (V4) record.
+fn usn_journal() -> Vec<u8> {
+    let mut j = Vec::new();
+    let mut add = |r: &dyn Fn(u64) -> Vec<u8>| {
+        let record = r(j.len() as u64);
+        j.extend(record);
+    };
+    add(&|u| usn_v2(u, (900, 1), (36, 1), CREATE, ARCHIVE, "evil.dll"));
+    add(&|u| usn_v2(u, (901, 1), (37, 1), CREATE | CLOSE, ARCHIVE, "before.txt"));
+    add(&|u| usn_v2(u, (37, 1), (36, 1), OLD_NAME, DIRECTORY, "old3"));
+    add(&|u| usn_v2(u, (37, 1), (36, 1), NEW_NAME, DIRECTORY, "3"));
+    add(&|u| usn_v2(u, (902, 1), (37, 1), CREATE | CLOSE, ARCHIVE, "after.txt"));
+    add(&|u| usn_v2(u, (950, 2), (30, 1), CREATE, DIRECTORY, "Temp1"));
+    add(&|u| {
+        usn_v2(
+            u,
+            (903, 1),
+            (950, 2),
+            CREATE | CLOSE,
+            ARCHIVE,
+            "dropped.exe",
+        )
+    });
+    add(&|u| usn_v2(u, (950, 2), (30, 1), DELETE | CLOSE, DIRECTORY, "Temp1"));
+    add(&|u| usn_v2(u, (904, 1), (999, 9), CREATE, ARCHIVE, "orphan.txt"));
+    // USN_RECORD_V4: header, references, USN, reasons, source, remaining, 1 extent of 16 bytes
+    let mut v4 = 80_u32.to_le_bytes().to_vec();
+    v4.extend(4_u16.to_le_bytes());
+    v4.extend(0_u16.to_le_bytes());
+    v4.extend(u128::from(1_u64 << 48 | 900).to_le_bytes());
+    v4.extend(u128::from(1_u64 << 48 | 36).to_le_bytes());
+    v4.extend((j.len() as u64).to_le_bytes());
+    v4.extend(2_u32.to_le_bytes());
+    v4.extend(0_u32.to_le_bytes());
+    v4.extend(0_u32.to_le_bytes());
+    v4.extend(1_u16.to_le_bytes());
+    v4.extend(16_u16.to_le_bytes());
+    v4.extend(0_u64.to_le_bytes());
+    v4.extend(4096_u64.to_le_bytes());
+    j.extend(v4);
+    j
+}
+
+/// A KAPE-like collection: the journal at `HOST1/C/$Extend/$J`, the volume's `$MFT` at `HOST1/C/$MFT`.
+fn usn_triage() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let extend = dir.path().join("HOST1/C/$Extend");
+    std::fs::create_dir_all(&extend).unwrap();
+    std::fs::write(extend.join("$J"), usn_journal()).unwrap();
+    std::fs::copy(repo(MFT), dir.path().join("HOST1/C/$MFT")).unwrap();
+    dir
+}
+
+#[test]
+fn usn_journal_paths_are_those_of_each_records_time() {
+    let dir = usn_triage();
+    let journal = dir.path().join("HOST1/C/$Extend/$J");
+    let r = run(&[
+        "parse-usn-journal",
+        "-f",
+        journal.to_str().unwrap(),
+        "-t",
+        "csv",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let mut csv = csv::Reader::from_reader(r.stdout.as_bytes());
+    let header = csv.headers().unwrap().clone();
+    assert_eq!(
+        &header.iter().take(13).collect::<Vec<_>>(),
+        &[
+            "Name",
+            "Extension",
+            "EntryNumber",
+            "SequenceNumber",
+            "ParentEntryNumber",
+            "ParentSequenceNumber",
+            "ParentPath",
+            "UpdateSequenceNumber",
+            "UpdateTimestamp",
+            "UpdateReasons",
+            "FileAttributes",
+            "OffsetToData",
+            "SourceFile",
+        ],
+        "MFTECmd's columns first"
+    );
+    let col = |name: &str| header.iter().position(|h| h == name).unwrap();
+    let rows: Vec<csv::StringRecord> = csv.records().map(|r| r.unwrap()).collect();
+    assert_eq!(rows.len(), 9, "the V4 record is not a CSV row");
+    let path = |name: &str| {
+        let row = rows.iter().find(|r| &r[col("Name")] == name).unwrap();
+        row[col("ParentPath")].to_string()
+    };
+    assert_eq!(path("evil.dll"), r".\WINDOWS\system32\spool\drivers\w32x86");
+    assert_eq!(
+        path("before.txt"),
+        r".\WINDOWS\system32\spool\drivers\w32x86\old3",
+        "before the rename"
+    );
+    assert_eq!(
+        path("after.txt"),
+        r".\WINDOWS\system32\spool\drivers\w32x86\3"
+    );
+    assert_eq!(
+        path("dropped.exe"),
+        r".\WINDOWS\system32\config\Temp1",
+        "a directory the MFT no longer has"
+    );
+    assert_eq!(path("orphan.txt"), r".\[Unknown 999-9]");
+    let evil = rows.iter().find(|r| &r[col("Name")] == "evil.dll").unwrap();
+    assert_eq!(&evil[col("Extension")], ".dll");
+    assert_eq!(&evil[col("EntryNumber")], "900");
+    assert_eq!(&evil[col("UpdateTimestamp")], "2024-03-01T12:00:00Z");
+    assert_eq!(&evil[col("UpdateReasons")], "FILE_CREATE");
+    assert_eq!(&evil[col("FileAttributes")], "ARCHIVE");
+    assert_eq!(&evil[col("Version")], "2.0");
+}
+
+#[test]
+fn usn_journal_summary_and_directory_mode() {
+    let dir = usn_triage();
+    let out = dir.path().join("out");
+    let r = run(&[
+        "parse-usn-journal",
+        "-d",
+        dir.path().to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "-K",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    for line in [
+        "USN journals: 1",
+        "USN journals parsed: 1",
+        "Records: 9 (V2: 9, V3: 0)",
+        "Range-tracking records (V4): 1",
+        "Files created / deleted / renamed: 6 / 1 / 1",
+        "Paths: rewound from the journal, seeded from the $MFT",
+        "Records with an unknown directory: 1",
+        "Damaged data: 0 spans (0 B)",
+    ] {
+        assert!(r.stdout.contains(line), "{line}\n{}", r.stdout);
+    }
+    let saved = std::fs::read_to_string(out.join("HOST1_C__Extend__J.csv")).unwrap();
+    assert_eq!(saved.lines().count(), 10);
+
+    // JSON Lines: every field, and the range-tracking record with its extents
+    let journal = dir.path().join("HOST1/C/$Extend/$J");
+    let r = run(&[
+        "parse-usn-journal",
+        "-f",
+        journal.to_str().unwrap(),
+        "-t",
+        "jsonl",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let docs: Vec<Value> = r
+        .stdout
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(docs.len(), 10);
+    assert_eq!(docs[0]["file"]["entry"], 900);
+    assert_eq!(docs[0]["reasons"][0], "FILE_CREATE");
+    assert_eq!(docs[9]["version"], "4.0");
+    assert_eq!(docs[9]["extents"][0]["length"], 4096);
+}
+
+#[test]
+fn usn_journal_without_an_mft_and_real_records() {
+    let r = run(&["parse-usn-journal", "-f", USN_SLICE, "-K"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    for line in [
+        "Records: 199 (V2: 199, V3: 0)",
+        "Time range: 2022-02-05T18:56:53.653148700Z",
+        "Paths: rewound from the journal (no $MFT found)",
+        "To save every record, add -o <FILE>",
+    ] {
+        assert!(r.stdout.contains(line), "{line}\n{}", r.stdout);
+    }
+}
+
+#[test]
+fn usn_records_are_carved_from_other_data() {
+    let dir = tempfile::tempdir().unwrap();
+    let image = dir.path().join("disk.raw");
+    let mut data: Vec<u8> = (0..20_000_u32)
+        .flat_map(|i| i.wrapping_mul(2_654_435_761).to_le_bytes())
+        .collect();
+    data.extend(usn_journal());
+    data.extend([0xA5; 4096]);
+    std::fs::write(&image, &data).unwrap();
+    let r = run(&[
+        "parse-usn-journal",
+        "-f",
+        image.to_str().unwrap(),
+        "--carve",
+        "-m",
+        MFT,
+        "-t",
+        "jsonl",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let docs: Vec<Value> = r
+        .stdout
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(
+        docs.len(),
+        9,
+        "every V2 record, nothing from the other data"
+    );
+    assert_eq!(docs[0]["offset"], 80_000);
+    assert_eq!(
+        docs[0]["parent_path"],
+        r".\WINDOWS\system32\spool\drivers\w32x86"
+    );
+
+    let r = run(&[
+        "parse-usn-journal",
+        "-f",
+        image.to_str().unwrap(),
+        "--carve",
+        "-K",
+    ]);
+    assert!(
+        r.stdout.contains("Records carved: 9 (V2: 9, V3: 0)"),
+        "{}",
+        r.stdout
+    );
+    assert!(r.stdout.contains("Paths: none (no $MFT given)"));
+}
