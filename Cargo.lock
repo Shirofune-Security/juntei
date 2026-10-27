@@ -585,6 +585,7 @@ dependencies = [
  "indicatif",
  "mft",
  "serde_json",
+ "sootmark-usn",
  "tempfile",
  "termcolor",
 ]
@@ -634,7 +635,7 @@ dependencies = [
 [[package]]
 name = "mft"
 version = "0.8.0"
-source = "git+https://github.com/Yamato-Security/ys-mft-parser?rev=6379318dbfc572dbf27cdd2b6c8fbda60ba4ec96#6379318dbfc572dbf27cdd2b6c8fbda60ba4ec96"
+source = "git+https://github.com/Yamato-Security/ys-mft-parser?rev=9ccde49d1ac252e64fa44af86adde6695989531a#9ccde49d1ac252e64fa44af86adde6695989531a"
 dependencies = [
  "bitflags 2.13.2",
  "byteorder",
@@ -850,6 +851,14 @@ name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
+
+[[package]]
+name = "sootmark-usn"
+version = "0.2.0"
+source = "git+https://github.com/Yamato-Security/ys-usn-journal-parser?rev=dd3f51fce43626d9e39ddc0991edc7b4c5100f22#dd3f51fce43626d9e39ddc0991edc7b4c5100f22"
+dependencies = [
+ "mft",
+]
 
 [[package]]
 name = "strsim"
