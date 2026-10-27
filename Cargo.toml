@@ -15,7 +15,8 @@ include = ["src/**/*", "art/**/*", "LICENSE", "README.md", "CHANGELOG.md"]
 # Amcache parsing and output: Yamato Security's ys-amcache-parser (Apache-2.0), pinned to a commit.
 amcache-forensic = { git = "https://github.com/Yamato-Security/ys-amcache-parser", rev = "3bfc944a9b5c4c46b94bda12ca6b9af9f83c255a" }
 bytesize = "2"
-# The Observation trait gives the severity of an Amcache finding.
+# The Observation trait gives the severity of an Amcache finding; the system-binary and
+# staging-directory lists drive the Prefetch findings.
 forensicnomicon = "1"
 chrono = { version = "0.4", features = ["clock"] }
 clap = { version = "4.5", features = ["derive"] }
@@ -24,6 +25,9 @@ indicatif = "0.18"
 # $MFT parsing: Yamato Security's ys-mft-parser, a fork of Omer Ben-Amram's mft crate
 # (MIT / Apache-2.0), pinned to a commit, without its mft_dump binary.
 mft = { git = "https://github.com/Yamato-Security/ys-mft-parser", rev = "6379318dbfc572dbf27cdd2b6c8fbda60ba4ec96", default-features = false }
+# Prefetch parsing: Yamato Security's ys-prefetch-parser, a fork of Samuel Garcés Marín's
+# frnsc-prefetch crate (MIT), pinned to a commit.
+frnsc-prefetch = { git = "https://github.com/Yamato-Security/ys-prefetch-parser", rev = "ef0ef23f649334981d28b8d76eb1608e6f69fbec" }
 serde_json = "1"
 termcolor = "1"
 
