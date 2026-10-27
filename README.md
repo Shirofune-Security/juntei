@@ -9,8 +9,8 @@ not event logs.
 | Artifact | Command | Status |
 | --- | --- | --- |
 | Amcache (`Amcache.hve`) | `parse-amcache` | Supported |
+| `$MFT` | `parse-mft` | Supported |
 | Prefetch (`*.pf`) | | Planned |
-| `$MFT` | | Planned |
 | `$UsnJrnl:$J` | | Planned |
 | More Windows artifacts | | Planned |
 
@@ -98,6 +98,60 @@ Amcache parsing and the output formats come from Yamato Security's
 Albert Hui's [amcache-forensic](https://github.com/SecurityRonin/amcache-forensic). See its
 [output documentation](https://github.com/Yamato-Security/ys-amcache-parser/blob/main/docs/output.md)
 for every field.
+
+### `parse-mft`
+
+Parses the NTFS Master File Table (`$MFT`): one record per file and directory, including deleted
+ones, with the full path, flags, sizes, `$STANDARD_INFORMATION` and `$FILE_NAME` timestamps and
+alternate data streams.
+
+```
+Input:
+  -d, --directory <DIR>  Directory to search recursively for $MFT files
+  -f, --file <FILE>      File path to one $MFT
+
+Filtering:
+  -r, --ranges <RANGES>  Parse only these entry numbers (ex: 0-15,30)
+
+Output:
+  -o, --output <PATH>                   Save every entry to a file (with -d: a directory with one file per $MFT)
+  -t, --output-type <TYPE>              Output type: csv (default), json, jsonl. Without -o, the entries are written to stdout
+  -e, --extract-resident-streams <DIR>  Write the resident $DATA streams (the content of small files and alternate data streams) to files in DIR
+  -C, --clobber                         Overwrite files when saving
+
+Display Settings:
+  -K, --no-color  Disable color output
+  -q, --quiet     Quiet mode: do not display the launch banner
+```
+
+```
+# Entry counts (in use, deleted, directories, alternate data streams, damaged entries)
+juntei parse-mft -f '$MFT'
+
+# Every entry as CSV
+juntei parse-mft -f '$MFT' -o mft.csv
+
+# The $MFT of every host in a triage collection, one JSONL file each
+juntei parse-mft -d triage/ -o mft-jsonl -t jsonl
+
+# Entries 0-15 and 30 as JSON Lines on stdout
+juntei parse-mft -f '$MFT' -t jsonl -r 0-15,30
+
+# The content of small files and alternate data streams stored in the $MFT itself
+juntei parse-mft -f '$MFT' -e resident-streams
+```
+
+- Without `-o` or `-t`, only the summary is shown. CSV has one row per entry (the columns of
+  `mft_dump`); JSON / JSONL have every attribute of every entry.
+- With `-d`, files named `$MFT` (or ending in `$MFT`) are parsed; `-o` is a directory with one
+  file per `$MFT`, named after its path (`HOST1/C/$MFT` → `HOST1_C__MFT.csv`).
+- Extracted streams are named `<entry>-<sequence>_<full path>_<stream number>_<stream name>.dontrun`;
+  characters that are unsafe in file names become `_`. They are evidence: do not run them.
+- Damaged or crafted records: a file whose first record is unusable is skipped, a parent reference
+  that loops gives an `[Unknown]` path instead of a crash, and unreadable entries are counted.
+
+$MFT parsing and the CSV / JSON formats come from Omer Ben-Amram's
+[mft](https://github.com/omerbenamram/mft) crate (MIT / Apache-2.0).
 
 ## License
 

@@ -338,3 +338,230 @@ fn input_and_output_errors() {
         r.stdout
     );
 }
+
+// ----- parse-mft --------------------------------------------------------------------------------
+
+const MFT: &str = "test_files/mft/MFT";
+
+/// FullPath with `/` separators (the crate joins paths with the platform separator).
+fn full_paths(csv_text: &str) -> Vec<(String, String)> {
+    let mut rdr = csv::Reader::from_reader(csv_text.as_bytes());
+    let headers = rdr.headers().unwrap().clone();
+    let id = headers.iter().position(|h| h == "EntryId").unwrap();
+    let path = headers.iter().position(|h| h == "FullPath").unwrap();
+    rdr.records()
+        .map(|r| {
+            let r = r.unwrap();
+            (r[id].to_string(), r[path].replace('\\', "/"))
+        })
+        .collect()
+}
+
+#[test]
+fn mft_summary_on_the_terminal() {
+    let r = run(&["parse-mft", "-f", MFT, "-K"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(r.stdout.contains("$MFT files: 1"), "{}", r.stdout);
+    assert!(r.stdout.contains("Parsing in progress. Please wait."));
+    assert!(
+        r.stdout
+            .contains("Entries: 1,016 (in use: 1,016, deleted: 0)")
+    );
+    assert!(r.stdout.contains("Directories / files: 153 / 863"));
+    assert!(r.stdout.contains("Entries with alternate data streams: 2"));
+    assert!(r.stdout.contains("Empty entries (skipped): 8"));
+    assert!(r.stdout.contains("To save every entry, add -o <FILE>"));
+}
+
+#[test]
+fn mft_csv_json_and_jsonl() {
+    let dir = tempfile::tempdir().unwrap();
+    let csv_path = dir.path().join("mft.csv");
+    let r = run(&[
+        "parse-mft",
+        "-f",
+        MFT,
+        "-o",
+        csv_path.to_str().unwrap(),
+        "-K",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(r.stdout.contains("Results saved: "));
+    let text = std::fs::read_to_string(&csv_path).unwrap();
+    assert!(text.starts_with(
+        "Signature,EntryId,Sequence,BaseEntryId,BaseEntrySequence,HardLinkCount,Flags,"
+    ));
+    let paths = full_paths(&text);
+    assert_eq!(paths.len(), 1016);
+    for (id, path) in [("0", "$MFT"), ("5", "."), ("30", "WINDOWS/system32/config")] {
+        assert!(
+            paths.contains(&(id.to_string(), path.to_string())),
+            "{id} {path}"
+        );
+    }
+
+    let json_path = dir.path().join("mft.json");
+    let r = run(&[
+        "parse-mft",
+        "-f",
+        MFT,
+        "-o",
+        json_path.to_str().unwrap(),
+        "-t",
+        "json",
+        "-K",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let docs = json_documents(&std::fs::read_to_string(&json_path).unwrap());
+    assert_eq!(docs.len(), 1016);
+    assert_eq!(docs[0]["header"]["record_number"], 0);
+    assert!(docs[0]["attributes"].as_array().unwrap().len() > 2);
+
+    // -t without -o: only the entries on stdout
+    let r = run(&["parse-mft", "-f", MFT, "-t", "jsonl", "-r", "0-5,30"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let ids: Vec<u64> = r
+        .stdout
+        .lines()
+        .map(|l| {
+            serde_json::from_str::<Value>(l).unwrap()["header"]["record_number"]
+                .as_u64()
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(ids, [0, 1, 2, 3, 4, 5, 30]);
+}
+
+#[test]
+fn mft_resident_streams_and_directory_mode() {
+    let tree = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tree.path().join("HOST1/C")).unwrap();
+    std::fs::create_dir_all(tree.path().join("HOST2")).unwrap();
+    std::fs::copy(repo(MFT), tree.path().join("HOST1/C/$MFT")).unwrap();
+    std::fs::copy(repo(MFT), tree.path().join("HOST2/$MFT")).unwrap();
+    std::fs::copy(repo(MFT), tree.path().join("HOST2/$MFTMirr")).unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let csv_dir = out.path().join("csv");
+    let streams = out.path().join("streams");
+    let r = run(&[
+        "parse-mft",
+        "-d",
+        tree.path().to_str().unwrap(),
+        "-o",
+        csv_dir.to_str().unwrap(),
+        "-e",
+        streams.to_str().unwrap(),
+        "-K",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(
+        r.stdout.contains("$MFT files: 2"),
+        "$MFTMirr is not an $MFT: {}",
+        r.stdout
+    );
+    assert!(r.stdout.contains("(2 files)"));
+    assert!(
+        r.stdout.contains("Resident streams extracted: 48"),
+        "{}",
+        r.stdout
+    );
+    for name in ["HOST1_C__MFT", "HOST2__MFT"] {
+        let text = std::fs::read_to_string(csv_dir.join(format!("{name}.csv"))).unwrap();
+        assert_eq!(full_paths(&text).len(), 1016, "{name}");
+        assert_eq!(
+            std::fs::read_dir(streams.join(name)).unwrap().count(),
+            24,
+            "{name}"
+        );
+    }
+    // stream files are named after the entry and its path
+    let names: Vec<String> = std::fs::read_dir(streams.join("HOST2__MFT"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+        .collect();
+    assert!(names.iter().all(|n| n.ends_with(".dontrun")), "{names:?}");
+    // the entries of several $MFT files cannot share stdout
+    let r = run(&[
+        "parse-mft",
+        "-d",
+        tree.path().to_str().unwrap(),
+        "-t",
+        "csv",
+    ]);
+    assert_eq!(r.code, 1);
+    assert!(
+        r.stderr.contains("With -d, save the entries with -o <DIR>"),
+        "{}",
+        r.stderr
+    );
+}
+
+#[test]
+fn mft_damaged_inputs_do_not_stop_the_run() {
+    let dir = tempfile::tempdir().unwrap();
+    // two directories that name each other as parent: the crate's own path lookup overflows the stack
+    let mut data = std::fs::read(repo(MFT)).unwrap();
+    let mut dirs: Vec<(usize, Vec<usize>)> = Vec::new();
+    for i in 16..data.len() / 1024 {
+        let base = i * 1024;
+        if &data[base..base + 4] != b"FILE" || data[base + 0x16] & 2 == 0 {
+            continue;
+        }
+        let mut off = usize::from(u16::from_le_bytes([data[base + 0x14], data[base + 0x15]]));
+        let mut fn_offsets = Vec::new();
+        while off + 8 < 1024 {
+            let t = u32::from_le_bytes(data[base + off..base + off + 4].try_into().unwrap());
+            let len = u32::from_le_bytes(data[base + off + 4..base + off + 8].try_into().unwrap());
+            if t == 0xFFFF_FFFF || len == 0 {
+                break;
+            }
+            if t == 0x30 && data[base + off + 8] == 0 {
+                let content = usize::from(u16::from_le_bytes([
+                    data[base + off + 0x14],
+                    data[base + off + 0x15],
+                ]));
+                fn_offsets.push(base + off + content);
+            }
+            off += len as usize;
+        }
+        if !fn_offsets.is_empty() {
+            dirs.push((i, fn_offsets));
+        }
+        if dirs.len() == 2 {
+            break;
+        }
+    }
+    let (a, b) = (dirs[0].0, dirs[1].0);
+    for ((_, offsets), parent) in dirs.iter().zip([b, a]) {
+        for &o in offsets {
+            data[o..o + 6].copy_from_slice(&(parent as u64).to_le_bytes()[..6]);
+            data[o + 6..o + 8].copy_from_slice(&[0, 0]);
+        }
+    }
+    let cycle = dir.path().join("cycle_$MFT");
+    std::fs::write(&cycle, &data).unwrap();
+    let zero = dir.path().join("zero_$MFT");
+    std::fs::write(&zero, vec![0u8; 4096]).unwrap();
+    let r = run(&["parse-mft", "-d", dir.path().to_str().unwrap(), "-K", "-q"]);
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    assert!(
+        r.stdout
+            .contains("$MFT files parsed: 1 (could not parse: 1)"),
+        "{}",
+        r.stdout
+    );
+    assert!(
+        r.stdout.contains("the first entry is not a FILE record"),
+        "{}",
+        r.stdout
+    );
+    assert!(r.stdout.contains("Entries: 1,016"), "{}", r.stdout);
+
+    let r = run(&["parse-mft", "-f", "README.md", "-K", "-q"]);
+    assert_eq!(r.code, 1);
+    assert!(
+        r.stdout.contains("Could not parse README.md: not an $MFT"),
+        "{}",
+        r.stdout
+    );
+}
