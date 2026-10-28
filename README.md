@@ -14,6 +14,7 @@ not event logs.
 | USN journal (`$UsnJrnl:$J`) | `parse-usn-journal` | Supported |
 | SRUM (`SRUDB.dat`) | `parse-srum` | Supported |
 | Shortcuts (`*.lnk`) | `parse-lnk` | Supported |
+| Jump lists (`*.automaticDestinations-ms`, `*.customDestinations-ms`) | `parse-jump-lists` | Supported |
 | More Windows artifacts | | Planned |
 
 ## Build
@@ -448,6 +449,75 @@ LECmd have LECmd's values except 16: 13 target paths (LECmd shows a damaged item
 4 and a placeholder in 6, and names an MTP device or Control Panel applet that `parse-lnk` doesn't
 in 3), 2 lists of extra data blocks (blocks with unknown signatures or cut off, which LECmd calls
 `DamagedDataBlock`) and 1 MFT reference LECmd reads from the wrong bytes.
+
+### `parse-jump-lists`
+
+Parses Windows jump lists: what each application's taskbar and Start menu entry offers. An
+automatic jump list (`*.automaticDestinations-ms`, under
+`AppData\Roaming\Microsoft\Windows\Recent\AutomaticDestinations`) is Windows' own record of the
+files and folders an application opened: for each, when it was last used, how often (Windows 10
+and later), whether it is pinned, the machine and the distributed link tracking IDs of the target,
+its path, and a shortcut with the target's times, size, volume and MFT reference. A custom jump
+list (`*.customDestinations-ms`, under `CustomDestinations`) is the application's own menu: its
+categories ("Most visited", "Recently closed"), its tasks and their shortcuts. The file name starts
+with the application's AppID.
+
+```
+Input:
+  -d, --directory <DIR>  Directory to search recursively for jump lists (*.automaticDestinations-ms, *.customDestinations-ms)
+  -f, --file <FILE>      File path to one jump list
+      --code-page <CP>   Code page of text in links that isn't Unicode: the system's ANSI code page (932 for Japanese) [default: 1252]
+
+Output:
+  -o, --output <PATH>       Save every entry: a directory of CSV tables, or a file (json, jsonl)
+  -t, --output-type <TYPE>  Output type: csv (default), json, jsonl. Without -o, json and jsonl are written to stdout
+  -C, --clobber             Overwrite files when saving
+
+Display Settings:
+  -K, --no-color  Disable color output
+  -q, --quiet     Quiet mode: do not display the launch banner
+```
+
+```
+# Applications, machines, time range and findings on the terminal
+juntei parse-jump-lists -d C/Users/alice/AppData/Roaming/Microsoft/Windows/Recent
+
+# JLECmd's two CSV tables: jl/AutomaticDestinations.csv and jl/CustomDestinations.csv
+juntei parse-jump-lists -d triage/ -o jl
+
+# Every entry, link and property as JSON Lines, one jump list per line
+juntei parse-jump-lists -f f01b4d95cf55d32a.automaticDestinations-ms -t jsonl | jq .
+```
+
+- CSV has Eric Zimmerman's JLECmd's columns: `AutomaticDestinations.csv` (`SourceFile` …
+  `Notes`: one row per `DestList` entry with its link, and one per link stream no entry names,
+  noted `Found in Directory, not DestList` as JLECmd writes them with `--withDir`) and then
+  `DisplayPath` (shell namespace GUIDs named), `PinPosition`, `NetworkPath`, `Name`, `IconLocation`
+  and `Problems`; `CustomDestinations.csv` (`SourceFile` … `Arguments`: one row per link, with its
+  category in `EntryName`, `Tasks` for tasks) and then `Notes` (links left over after the last
+  category), `NetworkPath`, `Name`, `IconLocation` and `Problems`. `EntryNumber` is in hexadecimal
+  (the stream's name), as JLECmd writes it. Times are UTC (RFC 3339). JSON / JSONL have one object
+  per jump list with every field: the `DestList` header, each entry (with its score, checksum and
+  property store) and its link as `parse-lnk` writes one, the `DestListPropertyStore`, the streams,
+  each custom category, the bytes after the last one and the links in them.
+- Application names come from Eric Zimmerman's list of AppIDs.
+- Findings on the terminal: links left over from an earlier version of a custom list (Windows
+  rewrites the file in place, and when the new list is shorter, the end of the old one stays: a
+  browser's recently closed pages, say), link streams no `DestList` entry names (removed or
+  damaged entries), items staged for a CD or DVD burn, and shells or script hosts (`cmd.exe`,
+  `powershell.exe`, `mshta.exe`, …) started with arguments.
+- Damaged jump lists are parsed as far as they go: a file that ends inside its last sector is read
+  (as Windows 11 leaves them), and the problems are reported (an entry whose stream is missing, a
+  stream the file cuts short, a count that disagrees). A file that is neither kind is reported and
+  skipped.
+
+Jump list parsing comes from Yamato Security's
+[ys-jump-lists-parser](https://github.com/Yamato-Security/ys-jump-lists-parser), built from the
+jump list and compound file code of Sootmark's [shell](https://github.com/Sootmark/shell) crate
+(MIT OR Apache-2.0), with links read by ys-lnk-parser. On the 77 public jump lists it was compared
+on, every one of the 13,057 cells `parse-jump-lists` shares with JLECmd 2026.10 (times to 100 ns)
+has JLECmd's value, and the six files JLECmd refuses (empty custom lists, a missing footer, a file
+that isn't a jump list) are read or reported.
 
 ## License
 

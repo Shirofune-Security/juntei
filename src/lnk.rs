@@ -232,6 +232,24 @@ pub fn run(opts: &LnkOptions) -> i32 {
     i32::from(parsed.is_empty())
 }
 
+/// Whether `target` is a shell or script host and `arguments` give it something to run.
+pub(crate) fn launches(target: &str, arguments: &str) -> bool {
+    let target = target.to_ascii_lowercase();
+    let program = target.rsplit(['\\', '/']).next().unwrap_or_default();
+    !arguments.trim().is_empty() && LAUNCHERS.contains(&program)
+}
+
+/// What a link starts: its local or network path, else the path of its target items.
+pub(crate) fn link_target(link: &Link) -> String {
+    if !link.local_path.is_empty() {
+        format!("{}{}", link.local_path, link.common_path)
+    } else if !link.network_path.is_empty() {
+        format!("{}\\{}", link.network_path, link.common_path)
+    } else {
+        link.target_path()
+    }
+}
+
 /// One parsed shortcut.
 struct Parsed {
     source: String,
@@ -249,20 +267,12 @@ impl Parsed {
 
     /// What the link starts: its local or network path, else the path of its target items.
     fn target(&self) -> String {
-        if !self.link.local_path.is_empty() {
-            format!("{}{}", self.link.local_path, self.link.common_path)
-        } else if !self.link.network_path.is_empty() {
-            format!("{}\\{}", self.link.network_path, self.link.common_path)
-        } else {
-            self.link.target_path()
-        }
+        link_target(&self.link)
     }
 
     /// Whether the link starts a shell or script host with arguments.
     fn launches(&self) -> bool {
-        let target = self.target().to_ascii_lowercase();
-        let program = target.rsplit(['\\', '/']).next().unwrap_or_default();
-        !self.link.arguments.trim().is_empty() && LAUNCHERS.contains(&program)
+        launches(&self.target(), &self.link.arguments)
     }
 
     fn hides_arguments(&self) -> bool {
@@ -293,7 +303,7 @@ fn parse_file(path: &Path, options: &lnk::Options) -> Result<Parsed, String> {
 }
 
 /// A FILETIME as an RFC 3339 UTC time, like the other commands' timestamps; empty when 0.
-fn filetime(ft: u64) -> String {
+pub(crate) fn filetime(ft: u64) -> String {
     if ft == 0 {
         return String::new();
     }
@@ -307,19 +317,19 @@ fn filetime(ft: u64) -> String {
 }
 
 /// A shell item's FAT time (seconds since 1970, as recorded) as RFC 3339.
-fn fat_time(secs: Option<i64>) -> Value {
+pub(crate) fn fat_time(secs: Option<i64>) -> Value {
     secs.and_then(|s| DateTime::<Utc>::from_timestamp(s, 0))
         .map_or(Value::Null, |t| {
             json!(t.to_rfc3339_opts(SecondsFormat::AutoSi, true))
         })
 }
 
-fn system_time(t: Option<SystemTime>) -> String {
+pub(crate) fn system_time(t: Option<SystemTime>) -> String {
     t.map(|t| DateTime::<Utc>::from(t).to_rfc3339_opts(SecondsFormat::AutoSi, true))
         .unwrap_or_default()
 }
 
-fn attributes(bits: u32) -> String {
+pub(crate) fn attributes(bits: u32) -> String {
     let mut names: Vec<String> = ATTRIBUTES
         .iter()
         .filter(|(b, _)| bits & b != 0)
@@ -332,7 +342,7 @@ fn attributes(bits: u32) -> String {
     names.join("|")
 }
 
-fn flags(link: &Link) -> String {
+pub(crate) fn flags(link: &Link) -> String {
     let mut names: Vec<String> = link.flag_names().iter().map(|s| (*s).to_owned()).collect();
     if link.unknown_flags() != 0 {
         names.push(format!("0x{:08x}", link.unknown_flags()));
@@ -340,7 +350,7 @@ fn flags(link: &Link) -> String {
     names.join("|")
 }
 
-fn drive_type(t: u32) -> String {
+pub(crate) fn drive_type(t: u32) -> String {
     match t {
         0 => "DRIVE_UNKNOWN".into(),
         1 => "DRIVE_NO_ROOT_DIR".into(),
@@ -353,23 +363,23 @@ fn drive_type(t: u32) -> String {
     }
 }
 
-fn show_command(link: &Link) -> String {
+pub(crate) fn show_command(link: &Link) -> String {
     link.show_command_name()
         .map_or_else(|| link.show_command.to_string(), str::to_owned)
 }
 
 /// A GUID as LECmd writes droids: lower case, no braces.
-fn droid(guid: &str) -> String {
+pub(crate) fn droid(guid: &str) -> String {
     guid.trim_matches(['{', '}']).to_ascii_lowercase()
 }
 
 /// The target's NTFS file reference: its last shell item's (not a parent folder's when the
 /// target itself has none).
-fn target_mft(link: &Link) -> Option<(u64, u16)> {
+pub(crate) fn target_mft(link: &Link) -> Option<(u64, u16)> {
     link.target.last().and_then(|i| i.mft)
 }
 
-fn block_names(link: &Link) -> String {
+pub(crate) fn block_names(link: &Link) -> String {
     link.blocks
         .iter()
         .map(|b| match lnk::block_name(*b) {
@@ -380,7 +390,7 @@ fn block_names(link: &Link) -> String {
         .join("|")
 }
 
-fn known_folder(link: &Link) -> String {
+pub(crate) fn known_folder(link: &Link) -> String {
     link.known_folder
         .as_ref()
         .map_or_else(String::new, |(id, _)| {
@@ -388,13 +398,13 @@ fn known_folder(link: &Link) -> String {
         })
 }
 
-fn special_folder(link: &Link) -> String {
+pub(crate) fn special_folder(link: &Link) -> String {
     link.special_folder.map_or_else(String::new, |(id, _)| {
         lnk::special_folder_name(id).map_or_else(|| id.to_string(), str::to_owned)
     })
 }
 
-fn network_provider(link: &Link) -> String {
+pub(crate) fn network_provider(link: &Link) -> String {
     link.network_provider.map_or_else(String::new, |p| {
         lnk::network_provider_name(p).map_or_else(|| format!("0x{p:08x}"), str::to_owned)
     })
@@ -506,7 +516,7 @@ fn csv_row(r: &Parsed) -> Vec<String> {
     ]
 }
 
-fn item_json(i: &Item) -> Value {
+pub(crate) fn item_json(i: &Item) -> Value {
     json!({
         "class": format!("0x{:02x}", i.class),
         "kind": format!("{:?}", i.kind),
@@ -520,14 +530,26 @@ fn item_json(i: &Item) -> Value {
     })
 }
 
-fn json_record(r: &Parsed) -> Value {
-    let l = &r.link;
+/// A property store's properties.
+pub(crate) fn properties_json(properties: &[shell::property::Property]) -> Vec<Value> {
+    properties
+        .iter()
+        .map(|p| {
+            json!({
+                "format_id": p.format_id,
+                "id": p.id,
+                "name": p.name,
+                "canonical_name": p.canonical_name(),
+                "value": p.value.display(),
+            })
+        })
+        .collect()
+}
+
+/// Every field of a link (a shortcut file's own fields aside).
+pub(crate) fn link_json(l: &Link) -> serde_json::Map<String, Value> {
     let mft = target_mft(l);
-    json!({
-        "source_file": r.source,
-        "source_created": system_time(r.source_times[0]),
-        "source_modified": system_time(r.source_times[1]),
-        "source_accessed": system_time(r.source_times[2]),
+    let Value::Object(fields) = json!({
         "header": {
             "flags": l.flag_names(),
             "unknown_flags": (l.unknown_flags() != 0).then(|| format!("0x{:08x}", l.unknown_flags())),
@@ -590,13 +612,7 @@ fn json_record(r: &Parsed) -> Value {
             "color_table": c.color_table,
         })),
         "console_code_page": l.console_code_page,
-        "properties": l.properties.iter().map(|p| json!({
-            "format_id": p.format_id,
-            "id": p.id,
-            "name": p.name,
-            "canonical_name": p.canonical_name(),
-            "value": p.value.display(),
-        })).collect::<Vec<_>>(),
+        "properties": properties_json(&l.properties),
         "vista_target_path": l.vista_target_path(),
         "tracker": l.tracker.as_ref().map(|t| json!({
             "machine_id": t.machine_id,
@@ -610,8 +626,24 @@ fn json_record(r: &Parsed) -> Value {
             "birth_created": filetime(t.birth_created),
         })),
         "problems": l.problems,
-        "appended_bytes": r.appended(),
-    })
+    }) else {
+        unreachable!("json! of an object")
+    };
+    fields
+}
+
+fn json_record(r: &Parsed) -> Value {
+    let mut fields = link_json(&r.link);
+    for (key, value) in [
+        ("source_file", json!(r.source)),
+        ("source_created", json!(system_time(r.source_times[0]))),
+        ("source_modified", json!(system_time(r.source_times[1]))),
+        ("source_accessed", json!(system_time(r.source_times[2]))),
+        ("appended_bytes", json!(r.appended())),
+    ] {
+        fields.insert(key.to_owned(), value);
+    }
+    Value::Object(fields)
 }
 
 fn write_records(

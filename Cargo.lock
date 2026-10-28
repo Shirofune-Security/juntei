@@ -606,6 +606,7 @@ dependencies = [
  "sootmark-usn",
  "tempfile",
  "termcolor",
+ "ys-jump-lists",
 ]
 
 [[package]]
@@ -896,7 +897,7 @@ source = "git+https://github.com/Yamato-Security/ys-srum-parser?rev=451e1d445c63
 [[package]]
 name = "sootmark-shell"
 version = "0.4.0"
-source = "git+https://github.com/Yamato-Security/ys-lnk-parser?rev=cc27ef31eb7a9ffeec46914f1b23d836eb0c6357#cc27ef31eb7a9ffeec46914f1b23d836eb0c6357"
+source = "git+https://github.com/Yamato-Security/ys-lnk-parser?rev=6c49bc9b80a992dd5155b406dd83d055d311445c#6c49bc9b80a992dd5155b406dd83d055d311445c"
 dependencies = [
  "codepage",
  "encoding_rs",
@@ -1227,6 +1228,14 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "ys-jump-lists"
+version = "0.1.0"
+source = "git+https://github.com/Yamato-Security/ys-jump-lists-parser?rev=504684098cab925feed8296cd349306253a23d8c#504684098cab925feed8296cd349306253a23d8c"
+dependencies = [
+ "sootmark-shell",
 ]
 
 [[package]]

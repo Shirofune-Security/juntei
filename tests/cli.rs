@@ -2079,3 +2079,332 @@ fn lnk_input_and_output_errors() {
     assert_eq!(r.code, 1);
     assert!(r.stdout.contains("already exists"), "{}", r.stdout);
 }
+
+// --- parse-jump-lists --------------------------------------------------------------------------
+
+const JUMP_LIST_DIR: &str = "test_files/jump_lists";
+const EXPLORER_WIN10: &str = "test_files/jump_lists/f01b4d95cf55d32a.automaticDestinations-ms";
+const CHROME_WIN11: &str = "test_files/jump_lists/5d696d521de238c3.customDestinations-ms";
+
+#[test]
+fn jump_list_summary_on_the_terminal() {
+    let r = run(&["parse-jump-lists", "-d", JUMP_LIST_DIR, "-K"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    // found under -d, so with the platform's separator
+    let found = |name: &str| format!("  {} (", Path::new(JUMP_LIST_DIR).join(name).display());
+    for line in [
+        "Jump lists parsed: 3 (automatic 2, custom 1)".to_owned(),
+        "Entries: 46 (pinned 4), custom list links 6".to_owned(),
+        "Applications: 3 (3 named from their AppID)".to_owned(),
+        "  Windows Explorer Windows 8.1 (f01b4d95cf55d32a): 9 links".to_owned(),
+        "Machines in the entries: 2 (desktop-annfp9d, pc)".to_owned(),
+        "Targets: fixed drives 53, removable drives 0, CD/DVD 1, network shares 0".to_owned(),
+        "With problems: 0".to_owned(),
+        "Links left over from an earlier version of a custom list: 2".to_owned(),
+        found("5d696d521de238c3.customDestinations-ms")
+            + r"at 11472) -> C:\Program Files\Google\Chrome\Application\chrome.exe --win-jumplist-action=most-visited http://192.168.50.33:5000/",
+        "Link streams no DestList entry names (removed or damaged entries): 0".to_owned(),
+        "Items staged for a CD or DVD burn: 1".to_owned(),
+        found("5f7b5f1e01b83767.automaticDestinations-ms") + r"entry 1) -> D:\autorun.inf",
+        "Shell or script host started with arguments: 0".to_owned(),
+        "To save every entry, add -o <DIR> (CSV tables)".to_owned(),
+    ] {
+        assert!(r.stdout.contains(&line), "{line}\n{}", r.stdout);
+    }
+}
+
+#[test]
+fn jump_list_csv_has_jlecmds_columns() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("jl");
+    let r = run(&[
+        "parse-jump-lists",
+        "-d",
+        JUMP_LIST_DIR,
+        "-o",
+        out.to_str().unwrap(),
+        "-K",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stdout);
+    assert!(r.stdout.contains("(2 CSV files)"), "{}", r.stdout);
+    let (header, rows) = csv_rows(&out.join("AutomaticDestinations.csv"));
+    assert_eq!(
+        &header[..7],
+        [
+            "SourceFile",
+            "SourceCreated",
+            "SourceModified",
+            "SourceAccessed",
+            "AppId",
+            "AppIdDescription",
+            "HasSps"
+        ]
+    );
+    assert_eq!(header[43], "Notes");
+    assert_eq!(header.len(), 50);
+    assert_eq!(rows.len(), 46);
+    let row = |file: &str, mru: &str| {
+        rows.iter()
+            .find(|r| r["SourceFile"].ends_with(file) && r["MRU"] == mru)
+            .unwrap()
+    };
+    // Windows 10 Explorer, from Eric Zimmerman's test set: as JLECmd reads it
+    let temp = row("f01b4d95cf55d32a.automaticDestinations-ms", "0");
+    for (column, value) in [
+        ("AppId", "f01b4d95cf55d32a"),
+        ("AppIdDescription", "Windows Explorer Windows 8.1"),
+        ("DestListVersion", "3"),
+        ("LastUsedEntryNumber", "9"),
+        ("EntryNumber", "7"),
+        ("CreationTime", "2015-11-24T18:39:02.491271400Z"),
+        ("LastModified", "2015-11-24T20:31:34.447525300Z"),
+        ("Hostname", "desktop-annfp9d"),
+        ("MacAddress", "00:15:5d:01:6d:02"),
+        ("Path", r"C:\Temp"),
+        ("InteractionCount", "2"),
+        ("PinStatus", "False"),
+        ("FileDroid", "a21b9d4a-92da-11e5-88e1-00155d016d02"),
+        ("VolumeBirthDroid", "4c01e77a-2661-40c9-b838-14ff153a26f5"),
+        ("TargetCreated", "2015-11-24T20:30:53.363218400Z"),
+        ("LocalPath", r"C:\Temp"),
+        ("TargetIDAbsolutePath", r"This PC\C:\Temp"),
+        ("TargetMFTEntryNumber", "192"),
+        ("TargetMFTSequenceNumber", "5"),
+        ("DriveType", "DRIVE_FIXED"),
+        (
+            "ExtraBlocksPresent",
+            "TrackerDataBlock|PropertyStoreDataBlock",
+        ),
+        ("Notes", ""),
+        ("Problems", ""),
+    ] {
+        assert_eq!(temp[column], value, "{column}");
+    }
+    // A Windows 10 version 6 list that ends inside its last sector: entry 1 is a file staged
+    // for a CD burn, named as JLECmd names it
+    let burn = row("5f7b5f1e01b83767.automaticDestinations-ms", "36");
+    assert_eq!(burn["DestListVersion"], "6");
+    assert_eq!(burn["TargetIDAbsolutePath"], r"This PC\D:\autorun.inf");
+    assert_eq!(burn["DriveType"], "DRIVE_CDROM");
+    assert_eq!(
+        rows.iter()
+            .filter(|r| r["SourceFile"].ends_with("5f7b5f1e01b83767.automaticDestinations-ms"))
+            .count(),
+        37
+    );
+
+    let (header, rows) = csv_rows(&out.join("CustomDestinations.csv"));
+    assert_eq!(header[6], "EntryName");
+    assert_eq!(header.len(), 33);
+    assert_eq!(rows.len(), 8);
+    let chrome: Vec<_> = rows
+        .iter()
+        .filter(|r| r["SourceFile"].ends_with("5d696d521de238c3.customDestinations-ms"))
+        .collect();
+    let names: Vec<&str> = chrome.iter().map(|r| r["EntryName"].as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "Most visited",
+            "Most visited",
+            "Recently closed",
+            "Recently closed",
+            "Tasks",
+            "Tasks",
+            "",
+            ""
+        ]
+    );
+    assert_eq!(
+        chrome[6]["Notes"],
+        "Left over after the last category, at offset 11472"
+    );
+    assert_eq!(
+        chrome[7]["Arguments"],
+        "--win-jumplist-action=recently-closed http://192.168.50.33:3000/"
+    );
+    assert_eq!(chrome[5]["Arguments"], "--incognito");
+}
+
+#[test]
+fn jump_list_json_and_jsonl() {
+    let r = run(&["parse-jump-lists", "-f", EXPLORER_WIN10, "-t", "jsonl"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(!r.stdout.contains("Results Summary"));
+    let v: Value = serde_json::from_str(r.stdout.trim()).unwrap();
+    assert_eq!(v["type"], "automatic");
+    assert_eq!(v["app_id"], "f01b4d95cf55d32a");
+    assert_eq!(v["dest_list"]["version"], 3);
+    assert_eq!(v["dest_list"]["last_entry_number"], 9);
+    let entries = v["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 9);
+    assert_eq!(entries[0]["stream"], "7");
+    assert_eq!(entries[0]["interaction_count"], 2);
+    assert_eq!(entries[0]["link"]["target_path"], r"This PC\C:\Temp");
+    assert_eq!(
+        entries[0]["link"]["tracker"]["machine_id"],
+        "desktop-annfp9d"
+    );
+    assert_eq!(v["streams"].as_array().unwrap().len(), 10);
+    assert_eq!(v["problems"].as_array().unwrap().len(), 0);
+
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("jl.json");
+    let r = run(&[
+        "parse-jump-lists",
+        "-f",
+        CHROME_WIN11,
+        "-t",
+        "json",
+        "-o",
+        out.to_str().unwrap(),
+        "-K",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stdout);
+    let docs = json_documents(&std::fs::read_to_string(&out).unwrap());
+    assert_eq!(docs.len(), 1);
+    let chrome = &docs[0];
+    assert_eq!(chrome["type"], "custom");
+    assert_eq!(chrome["format_version"], 2);
+    let categories = chrome["categories"].as_array().unwrap();
+    assert_eq!(categories[0]["name"], "Most visited");
+    assert_eq!(categories[2]["kind"], "tasks");
+    assert_eq!(chrome["trailing_bytes"], 3250);
+    assert_eq!(chrome["leftover"][0]["offset"], 11472);
+    assert_eq!(
+        chrome["leftover"][0]["link"]["arguments"],
+        "--win-jumplist-action=most-visited http://192.168.50.33:5000/"
+    );
+}
+
+/// `data` with the compound file directory entry of stream `from` renamed `to` (names of the
+/// same length or longer, up to 31 characters).
+fn rename_stream(data: &mut [u8], from: &str, to: &str) {
+    let name = |s: &str| -> Vec<u8> {
+        s.encode_utf16()
+            .chain([0])
+            .flat_map(u16::to_le_bytes)
+            .collect()
+    };
+    let (from, to) = (name(from), name(to));
+    // Directory entries are 128 bytes, sector-aligned: the name, its size in bytes at 64, the
+    // type at 66 (2 = stream).
+    let at = (0..data.len() - 128)
+        .step_by(128)
+        .find(|&o| {
+            data[o..o + from.len()] == from[..]
+                && data[o + 64..o + 66] == (from.len() as u16).to_le_bytes()
+                && data[o + 66] == 2
+        })
+        .unwrap();
+    data[at..at + 64].fill(0);
+    data[at..at + to.len()].copy_from_slice(&to);
+    data[at + 64..at + 66].copy_from_slice(&(to.len() as u16).to_le_bytes());
+}
+
+#[test]
+fn jump_list_streams_no_entry_names() {
+    // Explorer's list with entry 7's stream renamed: entry 7 has no link, stream 99 no entry.
+    let dir = tempfile::tempdir().unwrap();
+    let mut data = std::fs::read(repo(EXPLORER_WIN10)).unwrap();
+    rename_stream(&mut data, "7", "99");
+    let file = dir.path().join("f01b4d95cf55d32a.automaticDestinations-ms");
+    std::fs::write(&file, &data).unwrap();
+    let out = dir.path().join("jl");
+    let r = run(&[
+        "parse-jump-lists",
+        "-f",
+        file.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "-K",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stdout);
+    for line in [
+        "entry 7 has no stream",
+        "With problems: 1",
+        "Link streams no DestList entry names (removed or damaged entries): 1",
+        r"(stream 99) -> C:\Temp",
+    ] {
+        assert!(r.stdout.contains(line), "{line}\n{}", r.stdout);
+    }
+    let (_, rows) = csv_rows(&out.join("AutomaticDestinations.csv"));
+    assert_eq!(rows.len(), 10);
+    let entry = rows.iter().find(|r| r["EntryNumber"] == "7").unwrap();
+    assert_eq!(entry["Path"], r"C:\Temp");
+    assert_eq!(entry["LocalPath"], "");
+    // as JLECmd writes it with --withDir
+    let unlisted = rows.iter().find(|r| r["EntryNumber"] == "99").unwrap();
+    assert_eq!(unlisted["MRU"], "");
+    assert_eq!(unlisted["Notes"], "Found in Directory, not DestList");
+    assert_eq!(unlisted["LocalPath"], r"C:\Temp");
+    assert_eq!(unlisted["Path"], "");
+}
+
+#[test]
+fn jump_list_input_and_output_errors() {
+    let r = run(&[
+        "parse-jump-lists",
+        "-f",
+        "test_files/jump_lists/missing",
+        "-K",
+    ]);
+    assert_eq!(r.code, 1);
+    assert!(r.stdout.contains("The file does not exist"), "{}", r.stdout);
+
+    let r = run(&["parse-jump-lists", "-f", "test_files/lnk/README.md", "-K"]);
+    assert_eq!(r.code, 1);
+    assert!(
+        r.stdout.contains("Could not parse") && r.stdout.contains("not a custom jump list"),
+        "{}",
+        r.stdout
+    );
+
+    let r = run(&["parse-jump-lists", "-d", "test_files/lnk", "-K"]);
+    assert_eq!(r.code, 1);
+    assert!(r.stdout.contains("No jump lists"), "{}", r.stdout);
+
+    let r = run(&[
+        "parse-jump-lists",
+        "-f",
+        EXPLORER_WIN10,
+        "--code-page",
+        "12345",
+        "-K",
+    ]);
+    assert_eq!(r.code, 1);
+    assert!(
+        r.stdout.contains("Code page 12345 is not supported"),
+        "{}",
+        r.stdout
+    );
+
+    // CSV tables need an empty directory (or -C); JSON a new file
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("keep"), b"keep").unwrap();
+    let r = run(&[
+        "parse-jump-lists",
+        "-f",
+        EXPLORER_WIN10,
+        "-o",
+        dir.path().to_str().unwrap(),
+        "-K",
+    ]);
+    assert_eq!(r.code, 1);
+    assert!(r.stdout.contains("already exists"), "{}", r.stdout);
+    let file = dir.path().join("keep");
+    let r = run(&[
+        "parse-jump-lists",
+        "-f",
+        EXPLORER_WIN10,
+        "-o",
+        file.to_str().unwrap(),
+        "-K",
+    ]);
+    assert_eq!(r.code, 1);
+    assert!(
+        r.stdout.contains("is a file, not a directory"),
+        "{}",
+        r.stdout
+    );
+}

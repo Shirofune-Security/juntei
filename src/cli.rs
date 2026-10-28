@@ -82,6 +82,16 @@ pub enum Commands {
         disable_version_flag = true
     )]
     ParseLnk(LnkOptions),
+
+    /// Parse jump lists: files and folders each application opened, pinned items and tasks
+    #[command(
+        author = AUTHOR,
+        version = VERSION,
+        help_template = "\nVersion: {version}\n{author-with-newline}\n{usage-heading}\n  juntei parse-jump-lists <INPUT> [OPTIONS]\n\n{all-args}",
+        disable_help_flag = true,
+        disable_version_flag = true
+    )]
+    ParseJumpLists(JumpListOptions),
 }
 
 #[derive(Args, Clone, Debug, Default)]
@@ -556,6 +566,64 @@ impl LnkOptions {
     }
 }
 
+/// What `parse-jump-lists` writes.
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JumpListOutputType {
+    /// JLECmd's two tables in a directory: AutomaticDestinations.csv and CustomDestinations.csv
+    Csv,
+    /// One pretty-printed JSON object per jump list (every entry, link and property)
+    Json,
+    /// One JSON object per line
+    Jsonl,
+}
+
+#[derive(Args, Clone, Debug, Default)]
+#[clap(group(ArgGroup::new("input").args(["directory", "filepath"]).required(true).multiple(false)))]
+pub struct JumpListOptions {
+    /// Directory to search recursively for jump lists (*.automaticDestinations-ms, *.customDestinations-ms)
+    #[arg(help_heading = Some("Input"), short = 'd', long, value_name = "DIR", display_order = 100)]
+    pub directory: Option<PathBuf>,
+
+    /// File path to one jump list
+    #[arg(help_heading = Some("Input"), short = 'f', long = "file", value_name = "FILE", display_order = 101)]
+    pub filepath: Option<PathBuf>,
+
+    /// Code page of text in links that isn't Unicode: the system's ANSI code page (932 for Japanese)
+    #[arg(help_heading = Some("Input"), long = "code-page", value_name = "CP", default_value_t = 1252, display_order = 102)]
+    pub code_page: u16,
+
+    /// Save every entry: a directory of CSV tables, or a file (json, jsonl)
+    #[arg(help_heading = Some("Output"), short = 'o', long, value_name = "PATH", display_order = 300)]
+    pub output: Option<PathBuf>,
+
+    /// Output type: csv (default), json, jsonl. Without -o, json and jsonl are written to stdout
+    #[arg(help_heading = Some("Output"), short = 't', long = "output-type", value_name = "TYPE", value_enum, hide_possible_values = true, display_order = 301)]
+    pub output_type: Option<JumpListOutputType>,
+
+    /// Overwrite files when saving
+    #[arg(help_heading = Some("Output"), short = 'C', long, requires = "output", display_order = 302)]
+    pub clobber: bool,
+
+    #[clap(flatten)]
+    pub common: CommonOptions,
+}
+
+impl JumpListOptions {
+    pub fn output_type(&self) -> JumpListOutputType {
+        self.output_type.unwrap_or(JumpListOutputType::Csv)
+    }
+
+    /// Records on stdout (`-t json` or `-t jsonl` without `-o`): nothing but the data may be
+    /// printed there. CSV tables need a directory.
+    pub fn data_on_stdout(&self) -> bool {
+        self.output.is_none()
+            && matches!(
+                self.output_type,
+                Some(JumpListOutputType::Json | JumpListOutputType::Jsonl)
+            )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -751,5 +819,37 @@ mod tests {
         );
         assert!(parse(&["-f", "a.lnk", "-C"]).is_err(), "-C needs -o");
         assert!(parse(&["-f", "a.lnk", "--code-page", "x"]).is_err());
+    }
+
+    #[test]
+    fn jump_list_options() {
+        let parse = |a: &[&str]| {
+            let mut argv = vec!["juntei", "parse-jump-lists"];
+            argv.extend_from_slice(a);
+            Cli::try_parse_from(argv).map(|c| match c.cmd {
+                Commands::ParseJumpLists(o) => o,
+                _ => panic!(),
+            })
+        };
+        let o = parse(&["-d", "Recent"]).unwrap();
+        assert_eq!(
+            (o.output_type(), o.code_page),
+            (JumpListOutputType::Csv, 1252)
+        );
+        assert!(!o.data_on_stdout());
+        // CSV tables need a directory: never on stdout
+        assert!(
+            !parse(&["-d", "Recent", "-t", "csv"])
+                .unwrap()
+                .data_on_stdout()
+        );
+        assert!(
+            parse(&["-f", "a.automaticDestinations-ms", "-t", "jsonl"])
+                .unwrap()
+                .data_on_stdout()
+        );
+        assert!(parse(&["-f", "a", "-C"]).is_err(), "-C needs -o");
+        assert!(parse(&["-f", "a", "-d", "b"]).is_err());
+        assert!(parse(&[]).is_err());
     }
 }
