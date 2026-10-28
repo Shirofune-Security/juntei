@@ -478,8 +478,8 @@ fn automatic_rows(r: &Parsed, a: &Automatic) -> Vec<Vec<String>> {
             d.hostname.clone(),
             d.mac.clone(),
             d.path.clone(),
-            d.interaction_count
-                .map_or_else(String::new, |c| c.to_string()),
+            // Version 1 lists (Windows 7, 8) don't record it: 0, as JLECmd writes it.
+            d.interaction_count.unwrap_or(0).to_string(),
             if d.pin.is_some() { "True" } else { "False" }.to_owned(),
             droid(&d.file_birth_droid),
             droid(&d.file_droid),

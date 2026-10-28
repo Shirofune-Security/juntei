@@ -2031,6 +2031,21 @@ fn lnk_json_and_jsonl() {
 }
 
 #[test]
+fn lnk_times_that_are_not_times() {
+    // a link whose target creation time is 2^63 (100 ns units), past any time: empty, no panic
+    let dir = tempfile::tempdir().unwrap();
+    let mut data = std::fs::read(repo("test_files/lnk/opus_help.lnk")).unwrap();
+    data[28..36].copy_from_slice(&0x8000_0000_0000_0000u64.to_le_bytes());
+    let file = dir.path().join("opus_help.lnk");
+    std::fs::write(&file, &data).unwrap();
+    let r = run(&["parse-lnk", "-f", file.to_str().unwrap(), "-t", "jsonl"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let v: Value = serde_json::from_str(r.stdout.trim()).unwrap();
+    assert_eq!(v["header"]["target_created"], "");
+    assert_eq!(v["header"]["target_modified"], "2015-12-17T17:36:56Z");
+}
+
+#[test]
 fn lnk_input_and_output_errors() {
     let r = run(&["parse-lnk", "-f", "test_files/lnk/missing.lnk", "-K"]);
     assert_eq!(r.code, 1);
@@ -2093,12 +2108,12 @@ fn jump_list_summary_on_the_terminal() {
     // found under -d, so with the platform's separator
     let found = |name: &str| format!("  {} (", Path::new(JUMP_LIST_DIR).join(name).display());
     for line in [
-        "Jump lists parsed: 3 (automatic 2, custom 1)".to_owned(),
-        "Entries: 46 (pinned 4), custom list links 6".to_owned(),
-        "Applications: 3 (3 named from their AppID)".to_owned(),
+        "Jump lists parsed: 4 (automatic 3, custom 1)".to_owned(),
+        "Entries: 50 (pinned 4), custom list links 6".to_owned(),
+        "Applications: 4 (4 named from their AppID)".to_owned(),
         "  Windows Explorer Windows 8.1 (f01b4d95cf55d32a): 9 links".to_owned(),
-        "Machines in the entries: 2 (desktop-annfp9d, pc)".to_owned(),
-        "Targets: fixed drives 53, removable drives 0, CD/DVD 1, network shares 0".to_owned(),
+        "Machines in the entries: 3 (desktop-annfp9d, pc, win7x64)".to_owned(),
+        "Targets: fixed drives 57, removable drives 0, CD/DVD 1, network shares 0".to_owned(),
         "With problems: 0".to_owned(),
         "Links left over from an earlier version of a custom list: 2".to_owned(),
         found("5d696d521de238c3.customDestinations-ms")
@@ -2142,7 +2157,7 @@ fn jump_list_csv_has_jlecmds_columns() {
     );
     assert_eq!(header[43], "Notes");
     assert_eq!(header.len(), 50);
-    assert_eq!(rows.len(), 46);
+    assert_eq!(rows.len(), 50);
     let row = |file: &str, mru: &str| {
         rows.iter()
             .find(|r| r["SourceFile"].ends_with(file) && r["MRU"] == mru)
@@ -2180,6 +2195,22 @@ fn jump_list_csv_has_jlecmds_columns() {
     ] {
         assert_eq!(temp[column], value, "{column}");
     }
+    // Windows 7 Explorer, a version 1 list: no interaction count is recorded, and JLECmd writes 0
+    let videos = row("1b4dd67f29cb1962.automaticDestinations-ms", "0");
+    for (column, value) in [
+        ("DestListVersion", "1"),
+        ("EntryNumber", "4"),
+        ("InteractionCount", "0"),
+        ("Hostname", "win7x64"),
+        (
+            "Path",
+            r"::{031E4825-7B94-4DC3-B131-E946B44C8DD5}\Videos.library-ms",
+        ),
+        ("DisplayPath", r"UsersLibraries\Videos.library-ms"),
+    ] {
+        assert_eq!(videos[column], value, "{column}");
+    }
+    assert!(videos["LastModified"].starts_with("2016-01-16T20:23:24"));
     // A Windows 10 version 6 list that ends inside its last sector: entry 1 is a file staged
     // for a CD burn, named as JLECmd names it
     let burn = row("5f7b5f1e01b83767.automaticDestinations-ms", "36");
@@ -2339,6 +2370,55 @@ fn jump_list_streams_no_entry_names() {
     assert_eq!(unlisted["Notes"], "Found in Directory, not DestList");
     assert_eq!(unlisted["LocalPath"], r"C:\Temp");
     assert_eq!(unlisted["Path"], "");
+}
+
+/// `data` with the one occurrence of `from` (a little-endian u64) replaced with `to`.
+fn replace_u64(data: &mut [u8], from: u64, to: u64) {
+    let from = from.to_le_bytes();
+    let found: Vec<usize> = (0..data.len() - 8)
+        .filter(|&o| data[o..o + 8] == from)
+        .collect();
+    assert_eq!(found.len(), 1);
+    data[found[0]..found[0] + 8].copy_from_slice(&to.to_le_bytes());
+}
+
+#[test]
+fn jump_list_times_that_are_not_times() {
+    // Explorer's most recent entry last used at 2^63 (100 ns units), past any time: empty, no
+    // panic (it overflowed the conversion)
+    let dir = tempfile::tempdir().unwrap();
+    let mut data = std::fs::read(repo(EXPLORER_WIN10)).unwrap();
+    // 2015-11-24T20:31:34.4475253Z
+    replace_u64(&mut data, 0x01d1_26f7_1c53_a075, 0x8000_0000_0000_0000);
+    let file = dir.path().join("f01b4d95cf55d32a.automaticDestinations-ms");
+    std::fs::write(&file, &data).unwrap();
+    let r = run(&[
+        "parse-jump-lists",
+        "-f",
+        file.to_str().unwrap(),
+        "-t",
+        "jsonl",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let v: Value = serde_json::from_str(r.stdout.trim()).unwrap();
+    assert_eq!(v["entries"][0]["last_used"], "");
+    assert_eq!(
+        v["entries"][1]["last_used"],
+        "2015-11-24T20:31:34.433022100Z"
+    );
+    let out = dir.path().join("jl");
+    let r = run(&[
+        "parse-jump-lists",
+        "-f",
+        file.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "-K",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stdout);
+    let (_, rows) = csv_rows(&out.join("AutomaticDestinations.csv"));
+    assert_eq!(rows[0]["LastModified"], "");
+    assert_eq!(rows[0]["Path"], r"C:\Temp");
 }
 
 #[test]

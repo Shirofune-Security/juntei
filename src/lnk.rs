@@ -302,11 +302,17 @@ fn parse_file(path: &Path, options: &lnk::Options) -> Result<Parsed, String> {
     })
 }
 
-/// A FILETIME as an RFC 3339 UTC time, like the other commands' timestamps; empty when 0.
+/// The largest FILETIME that is a time: 9999-12-31 23:59:59.9999999 UTC (as in `parse-mft`'s
+/// MFTECmd columns, and .NET's limit).
+const MAX_FILETIME: u64 = 2_650_467_743_999_999_999;
+
+/// A FILETIME as an RFC 3339 UTC time, like the other commands' timestamps; empty when 0 or past
+/// 9999 (damaged or crafted data: a raw 64-bit value).
 pub(crate) fn filetime(ft: u64) -> String {
-    if ft == 0 {
+    if ft == 0 || ft > MAX_FILETIME {
         return String::new();
     }
+    // In range, so it fits an i64.
     let ticks = ft as i64 - 116_444_736_000_000_000;
     DateTime::<Utc>::from_timestamp(
         ticks.div_euclid(10_000_000),
@@ -789,6 +795,11 @@ mod tests {
             "38648bd4-606f-459b-91e5-d8883d4b70b1"
         );
         assert_eq!(filetime(0), "");
+        assert_eq!(filetime(1), "1601-01-01T00:00:00.000000100Z");
+        assert_eq!(filetime(MAX_FILETIME), "9999-12-31T23:59:59.999999900Z");
+        for invalid in [MAX_FILETIME + 1, 0x8000_0000_0000_0000, u64::MAX] {
+            assert_eq!(filetime(invalid), "", "{invalid:#x}");
+        }
         assert_eq!(
             filetime(130_131_449_897_040_000),
             "2013-05-16T02:29:49.704Z"

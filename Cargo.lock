@@ -1233,7 +1233,7 @@ dependencies = [
 [[package]]
 name = "ys-jump-lists"
 version = "0.1.0"
-source = "git+https://github.com/Yamato-Security/ys-jump-lists-parser?rev=504684098cab925feed8296cd349306253a23d8c#504684098cab925feed8296cd349306253a23d8c"
+source = "git+https://github.com/Yamato-Security/ys-jump-lists-parser?rev=bd40d5089740a8e8a01057d64e3ce2624d388508#bd40d5089740a8e8a01057d64e3ce2624d388508"
 dependencies = [
  "sootmark-shell",
 ]
