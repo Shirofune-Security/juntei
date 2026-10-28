@@ -553,6 +553,65 @@ fn mft_csv_options() {
     let r = run(&["parse-mft", "-f", MFT, "--cutoff", "yesterday", "-K"]);
     assert_ne!(r.code, 0);
     assert!(r.stderr.contains("is not a date or time"), "{}", r.stderr);
+    // a year chrono accepts but a FILETIME can't hold: an error, not an overflow
+    let r = run(&[
+        "parse-mft",
+        "-f",
+        MFT,
+        "--cutoff",
+        "+262142-12-31T23:59:59",
+        "-K",
+    ]);
+    assert_ne!(r.code, 0);
+    assert!(
+        r.stderr.contains("outside the times NTFS can hold"),
+        "{}",
+        r.stderr
+    );
+}
+
+#[test]
+fn mft_csv_reports_damaged_attributes() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut data = std::fs::read(repo(MFT)).unwrap();
+    // entry 62: the value of its first $FILE_NAME (at 0x98) starts past the end of the record
+    data[62 * 1024 + 0xAC] = 0xF0;
+    // entry 209: so does the value of its resident $DATA (at 0x108)
+    data[209 * 1024 + 0x108 + 0x14..][..2].copy_from_slice(&0x3F0u16.to_le_bytes());
+    let damaged = dir.path().join("damaged_$MFT");
+    std::fs::write(&damaged, &data).unwrap();
+    let out = dir.path().join("mft.csv");
+    let r = run(&[
+        "parse-mft",
+        "-f",
+        damaged.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "-r",
+        "62,209",
+        "--short-names",
+        "-K",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stdout);
+    let (_, rows) = csv_rows(&out);
+    // the damaged attributes are left out and said so, as MFTECmd does
+    let names: Vec<&str> = rows.iter().map(|r| r["FileName"].as_str()).collect();
+    assert_eq!(
+        names,
+        ["Repository", "system.ini"],
+        "REPOSI~1 was in the damaged $FILE_NAME"
+    );
+    assert_eq!(
+        rows[0]["ParseErrors"],
+        "$FILE_NAME attribute at 0x98 left out: its value (0x52 bytes at 0xF0) runs past the end of the attribute"
+    );
+    assert!(
+        rows[1]["ParseErrors"].starts_with("$DATA attribute at 0x108 left out: "),
+        "{}",
+        rows[1]["ParseErrors"]
+    );
+    // without its $DATA, the size is the $FILE_NAME's (it was 231)
+    assert_eq!(rows[1]["FileSize"], "219");
 }
 
 #[test]

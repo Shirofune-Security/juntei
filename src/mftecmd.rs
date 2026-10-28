@@ -234,42 +234,58 @@ impl Record {
                     continue;
                 }
             };
-            let value = match &header.residential_header {
-                ResidentialHeader::Resident(r) => r.value(raw).ok(),
-                ResidentialHeader::NonResident(_) => None,
+            // A resident value that doesn't fit in the record (or a value too short for its
+            // attribute) is a damaged attribute: MFTECmd leaves it out and says so in ParseErrors.
+            let value = || match &header.residential_header {
+                ResidentialHeader::Resident(r) => r.value(raw).map_err(|_| {
+                    format!(
+                        "its value (0x{:X} bytes at 0x{:X}) runs past the end of the attribute",
+                        r.data_size, r.data_offset
+                    )
+                }),
+                ResidentialHeader::NonResident(_) => Err("not resident".to_string()),
             };
-            let attr = match header.type_code {
-                MftAttributeType::StandardInformation => standard_info(raw),
-                MftAttributeType::FileName => value.and_then(file_name),
+            let attr: Result<Option<Attr>, String> = match header.type_code {
+                MftAttributeType::StandardInformation => standard_info(raw).map(Some),
+                MftAttributeType::FileName => value().and_then(file_name).map(Some),
                 MftAttributeType::DATA => {
                     let name = header.name.to_utf8_string();
-                    let (resident, non_resident) = match &header.residential_header {
-                        ResidentialHeader::Resident(r) => {
-                            let content = value.unwrap_or_default();
+                    match &header.residential_header {
+                        ResidentialHeader::Resident(r) => value().map(|content| {
                             let keep = (name == "Zone.Identifier").then(|| content.to_vec());
-                            (Some((u64::from(r.data_size), keep)), None)
-                        }
-                        ResidentialHeader::NonResident(n) => {
-                            (None, Some((n.vnc_first, n.file_size)))
-                        }
-                    };
-                    Some(Attr::Data(Data {
-                        name,
-                        resident,
-                        non_resident,
-                    }))
+                            Some(Attr::Data(Data {
+                                name,
+                                resident: Some((u64::from(r.data_size), keep)),
+                                non_resident: None,
+                            }))
+                        }),
+                        ResidentialHeader::NonResident(n) => Ok(Some(Attr::Data(Data {
+                            name,
+                            resident: None,
+                            non_resident: Some((n.vnc_first, n.file_size)),
+                        }))),
+                    }
                 }
-                MftAttributeType::ObjectId => value
-                    .filter(|v| v.len() >= 16)
-                    .map(|v| Attr::ObjectId(guid(&v[..16]))),
-                MftAttributeType::ReparsePoint => value.map(|v| Attr::Reparse(reparse_target(v))),
-                MftAttributeType::LoggedUtilityStream => {
-                    Some(Attr::LoggedUtilityStream(header.name.to_utf8_string()))
+                MftAttributeType::ObjectId => value().and_then(|v| match v.get(..16) {
+                    Some(id) => Ok(Some(Attr::ObjectId(guid(id)))),
+                    None => Err(format!("{} bytes, an object ID needs 16", v.len())),
+                }),
+                MftAttributeType::ReparsePoint => {
+                    value().map(|v| Some(Attr::Reparse(reparse_target(v))))
                 }
-                _ => None,
+                MftAttributeType::LoggedUtilityStream => Ok(Some(Attr::LoggedUtilityStream(
+                    header.name.to_utf8_string(),
+                ))),
+                _ => Ok(None),
             };
-            if let Some(attr) = attr {
-                record.attrs.push(attr);
+            match attr {
+                Ok(Some(attr)) => record.attrs.push(attr),
+                Ok(None) => {}
+                Err(e) => record.errors.push(format!(
+                    "{} attribute at 0x{:X} left out: {e}",
+                    attribute_name(header.type_code),
+                    header.start_offset
+                )),
             }
         }
         Some(record)
@@ -323,14 +339,27 @@ impl Record {
     }
 }
 
+/// The NTFS name of an attribute type, for `ParseErrors`.
+fn attribute_name(t: MftAttributeType) -> &'static str {
+    match t {
+        MftAttributeType::StandardInformation => "$STANDARD_INFORMATION",
+        MftAttributeType::FileName => "$FILE_NAME",
+        MftAttributeType::DATA => "$DATA",
+        MftAttributeType::ObjectId => "$OBJECT_ID",
+        MftAttributeType::ReparsePoint => "$REPARSE_POINT",
+        MftAttributeType::LoggedUtilityStream => "$LOGGED_UTILITY_STREAM",
+        _ => "an",
+    }
+}
+
 /// `$STANDARD_INFORMATION` at MFTECmd's offsets in the attribute record (the value starts at
 /// 0x18); the owner, security and USN fields only when the record is longer than 0x48 bytes.
-fn standard_info(raw: &[u8]) -> Option<Attr> {
+fn standard_info(raw: &[u8]) -> Result<Attr, String> {
     if raw.len() < 0x48 {
-        return None;
+        return Err(format!("{} bytes, it needs 0x48", raw.len()));
     }
     let long = raw.len() > 0x48;
-    Some(Attr::Si(StandardInfo {
+    Ok(Attr::Si(StandardInfo {
         created: filetime(i64_at(raw, 0x18)),
         modified: filetime(i64_at(raw, 0x20)),
         changed: filetime(i64_at(raw, 0x28)),
@@ -342,10 +371,11 @@ fn standard_info(raw: &[u8]) -> Option<Attr> {
 }
 
 /// `$FILE_NAME` from its value.
-fn file_name(v: &[u8]) -> Option<Attr> {
-    let length = usize::from(*v.get(0x40)?);
-    let name = v.get(0x42..0x42 + length * 2)?;
-    Some(Attr::Name(FileName {
+fn file_name(v: &[u8]) -> Result<Attr, String> {
+    let too_short = || format!("{} bytes, too short for its name", v.len());
+    let length = usize::from(*v.get(0x40).ok_or_else(too_short)?);
+    let name = v.get(0x42..0x42 + length * 2).ok_or_else(too_short)?;
+    Ok(Attr::Name(FileName {
         parent: reference(v, 0),
         created: filetime(i64_at(v, 0x08)),
         modified: filetime(i64_at(v, 0x10)),
@@ -948,9 +978,15 @@ pub fn parse_cutoff(s: &str) -> Result<i64, String> {
         .map_err(|_| {
             format!("'{s}' is not a date or time (ex: 2025-10-19 or 2025-10-19T13:45:30Z)")
         })?;
-    let unix_ticks = utc.and_utc().timestamp() * 10_000_000
-        + i64::from(utc.and_utc().timestamp_subsec_nanos() / 100);
-    Ok(unix_ticks + 116_444_736_000_000_000)
+    let t = utc.and_utc();
+    t.timestamp()
+        .checked_mul(10_000_000)
+        .and_then(|ticks| ticks.checked_add(i64::from(t.timestamp_subsec_nanos() / 100)))
+        .and_then(|ticks| ticks.checked_add(116_444_736_000_000_000))
+        .filter(|ft| (0..=MAX_FILETIME).contains(ft))
+        .ok_or_else(|| {
+            format!("'{s}' is outside the times NTFS can hold (1601-01-01 to 9999-12-31)")
+        })
 }
 
 #[cfg(test)]
@@ -1056,5 +1092,22 @@ mod tests {
             "the offset is applied"
         );
         assert!(parse_cutoff("yesterday").is_err());
+        // the times a FILETIME can hold, and no overflow past them
+        assert_eq!(parse_cutoff("1601-01-01").unwrap(), 0);
+        assert_eq!(
+            parse_cutoff("9999-12-31T23:59:59.9999999Z").unwrap(),
+            MAX_FILETIME
+        );
+        for outside in [
+            "1600-12-31",
+            "+262142-12-31T23:59:59",
+            "-262143-01-01T00:00:00",
+        ] {
+            let e = parse_cutoff(outside).unwrap_err();
+            assert!(
+                e.contains("outside the times NTFS can hold"),
+                "{outside}: {e}"
+            );
+        }
     }
 }
