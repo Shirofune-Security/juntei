@@ -92,6 +92,16 @@ pub enum Commands {
         disable_version_flag = true
     )]
     ParseJumpLists(JumpListOptions),
+
+    /// Parse the ShimCache (AppCompatCache) of SYSTEM hives: executables Windows saw, with their times and whether they ran
+    #[command(
+        author = AUTHOR,
+        version = VERSION,
+        help_template = "\nVersion: {version}\n{author-with-newline}\n{usage-heading}\n  juntei parse-shimcache <INPUT> [OPTIONS]\n\n{all-args}",
+        disable_help_flag = true,
+        disable_version_flag = true
+    )]
+    ParseShimcache(ShimcacheOptions),
 }
 
 #[derive(Args, Clone, Debug, Default)]
@@ -621,6 +631,59 @@ impl JumpListOptions {
                 self.output_type,
                 Some(JumpListOutputType::Json | JumpListOutputType::Jsonl)
             )
+    }
+}
+
+/// What `parse-shimcache` writes.
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShimcacheOutputType {
+    /// One row per entry (AppCompatCacheParser's columns and more)
+    Csv,
+    /// One pretty-printed JSON object per entry
+    Json,
+    /// One JSON object per line
+    Jsonl,
+}
+
+#[derive(Args, Clone, Debug, Default)]
+#[clap(group(ArgGroup::new("input").args(["directory", "filepath"]).required(true).multiple(false)))]
+pub struct ShimcacheOptions {
+    /// Directory to search recursively for SYSTEM hives
+    #[arg(help_heading = Some("Input"), short = 'd', long, value_name = "DIR", display_order = 100)]
+    pub directory: Option<PathBuf>,
+
+    /// File path to one SYSTEM hive, or an AppCompatCache value saved to a file
+    #[arg(help_heading = Some("Input"), short = 'f', long = "file", value_name = "FILE", display_order = 101)]
+    pub filepath: Option<PathBuf>,
+
+    /// Read a dirty hive as it is, without its transaction logs (SYSTEM.LOG1, SYSTEM.LOG2)
+    #[arg(help_heading = Some("Input"), long = "no-logs", display_order = 102)]
+    pub no_logs: bool,
+
+    /// Save every entry to a file
+    #[arg(help_heading = Some("Output"), short = 'o', long, value_name = "FILE", display_order = 300)]
+    pub output: Option<PathBuf>,
+
+    /// Output type: csv (default), json, jsonl. Without -o, the entries are written to stdout
+    #[arg(help_heading = Some("Output"), short = 't', long = "output-type", value_name = "TYPE", value_enum, hide_possible_values = true, display_order = 301)]
+    pub output_type: Option<ShimcacheOutputType>,
+
+    /// Overwrite files when saving
+    #[arg(help_heading = Some("Output"), short = 'C', long, requires = "output", display_order = 302)]
+    pub clobber: bool,
+
+    #[clap(flatten)]
+    pub common: CommonOptions,
+}
+
+impl ShimcacheOptions {
+    pub fn output_type(&self) -> ShimcacheOutputType {
+        self.output_type.unwrap_or(ShimcacheOutputType::Csv)
+    }
+
+    /// Entries on stdout (`-t` without `-o`): nothing but the data may be printed there.
+    pub fn data_on_stdout(&self) -> bool {
+        self.output.is_none() && self.output_type.is_some()
     }
 }
 

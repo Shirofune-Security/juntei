@@ -1,2 +1,5 @@
 * text=auto eol=lf
 *.hve binary
+*.gz binary
+*.bin binary
+*.raw binary

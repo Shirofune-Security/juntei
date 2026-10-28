@@ -2488,3 +2488,279 @@ fn jump_list_input_and_output_errors() {
         r.stdout
     );
 }
+
+const SHIMCACHE_DIR: &str = "test_files/shimcache";
+
+/// The Windows 11 SYSTEM hive of `test_files/shimcache/` and its transaction logs, unpacked
+/// where a collection has them.
+fn system_hive() -> tempfile::TempDir {
+    use std::io::Read as _;
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("HOST/C/Windows/System32/config");
+    std::fs::create_dir_all(&config).unwrap();
+    for name in ["SYSTEM", "SYSTEM.LOG1", "SYSTEM.LOG2"] {
+        let gz = std::fs::File::open(repo(&format!("{SHIMCACHE_DIR}/{name}.gz"))).unwrap();
+        let mut bytes = Vec::new();
+        flate2::read::GzDecoder::new(gz)
+            .read_to_end(&mut bytes)
+            .unwrap();
+        std::fs::write(config.join(name), bytes).unwrap();
+    }
+    dir
+}
+
+#[test]
+fn shimcache_summary_on_the_terminal() {
+    let hive = system_hive();
+    let r = run(&["parse-shimcache", "-d", hive.path().to_str().unwrap(), "-K"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    for line in [
+        "SYSTEM hives: 1",
+        "SYSTEM hives parsed: 1",
+        "Dirty hives recovered with their transaction logs: 1",
+        "Caches: 1 (Windows10C_11 1)",
+        "Entries: 359 (executed 30, not executed 329, no execution flag 0)",
+        "Duplicates (in an earlier control set): 0",
+        "Recovered from slack: 0",
+        "Last-modified times: 2021-05-20T08:51:57.791182Z - 2022-02-07T07:37:13.434150800Z",
+        "Damaged entries: 0",
+        "Findings: 27 (medium: 27)",
+        r"  [MEDIUM] SHIMCACHE-SUSPICIOUS-PATH C:\Users\ANDREW~1\AppData\Local\Temp\DA15D340-2806-4EF5-BB3C-C787E4CD384B\dismhost.exe",
+        "  … 17 more in the Findings column",
+        "To save every entry, add -o <FILE>",
+    ] {
+        assert!(r.stdout.contains(line), "{line}\n{}", r.stdout);
+    }
+    assert!(!r.stdout.contains("without their logs"), "{}", r.stdout);
+
+    // the hive as it is: dirty, its logs not applied (they don't change this cache)
+    let r = run(&[
+        "parse-shimcache",
+        "-d",
+        hive.path().to_str().unwrap(),
+        "--no-logs",
+        "-K",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    for line in [
+        "Dirty hives recovered with their transaction logs: 0",
+        "Dirty hives read without their logs (entries may be missing): 1",
+        "Entries: 359 (executed 30",
+    ] {
+        assert!(r.stdout.contains(line), "{line}\n{}", r.stdout);
+    }
+}
+
+#[test]
+fn shimcache_csv_has_appcompatcacheparsers_columns() {
+    let hive = system_hive();
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("shimcache.csv");
+    let r = run(&[
+        "parse-shimcache",
+        "-d",
+        hive.path().to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "-K",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stdout);
+    let (header, rows) = csv_rows(&out);
+    let ez_columns = [
+        "ControlSet",
+        "CacheEntryPosition",
+        "Path",
+        "LastModifiedTimeUTC",
+        "Executed",
+        "Duplicate",
+        "SourceFile",
+        "FromSlack",
+    ];
+    assert_eq!(&header[..8], ez_columns);
+    assert_eq!(header.len(), 20);
+    // every entry as Eric Zimmerman's AppCompatCacheParser writes it (its times to the second)
+    let (_, ez) = csv_rows(&repo(&format!(
+        "{SHIMCACHE_DIR}/AppCompatCacheParser_SYSTEM.csv"
+    )));
+    assert_eq!(rows.len(), 359);
+    assert_eq!(rows.len(), ez.len());
+    for (ours, theirs) in rows.iter().zip(&ez) {
+        for column in ez_columns {
+            let value = match column {
+                "LastModifiedTimeUTC" => {
+                    ours[column].get(..19).unwrap_or_default().replace('T', " ")
+                }
+                "SourceFile" => {
+                    assert!(ours[column].ends_with("SYSTEM"));
+                    continue;
+                }
+                _ => ours[column].clone(),
+            };
+            assert_eq!(value, theirs[column], "{column}: {ours:?}");
+        }
+    }
+    let first = &rows[0];
+    for (column, value) in [
+        ("CacheFormat", "Windows10C_11"),
+        ("CacheLastWrittenUTC", "2022-02-07T07:37:59.317450900Z"),
+        ("LastModifiedTimeUTC", "2022-02-07T07:37:13.434150800Z"),
+        ("DataSize", "72"),
+        ("Machine", "x64"),
+        ("InsertFlags", ""),
+        ("Findings", ""),
+    ] {
+        assert_eq!(first[column], value, "{column}");
+    }
+    let flagged: Vec<_> = rows
+        .iter()
+        .filter(|r| r["Findings"] == "SHIMCACHE-SUSPICIOUS-PATH")
+        .collect();
+    assert_eq!(flagged.len(), 27);
+}
+
+#[test]
+fn shimcache_values_as_json() {
+    // AppCompatCache values saved on their own: Windows XP, 7 (32-bit), 8.0 and 11
+    let r = run(&[
+        "parse-shimcache",
+        "-f",
+        &format!("{SHIMCACHE_DIR}/WinXPx86.bin"),
+        "-t",
+        "jsonl",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(!r.stdout.contains("Results Summary"));
+    let entries: Vec<Value> = r
+        .stdout
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(entries.len(), 17);
+    let xp = &entries[0];
+    assert_eq!(xp["cache_format"], "WindowsXP");
+    assert_eq!(xp["control_set"], Value::Null);
+    assert_eq!(xp["path"], r"C:\WINDOWS\system32\wscntfy.exe");
+    assert_eq!(xp["last_modified"], "2008-04-14T12:00:00Z");
+    assert_eq!(xp["executed"], Value::Null);
+    assert_eq!(xp["file_size"], 13824);
+    assert_eq!(xp["last_update"], "2016-01-13T22:20:03.265625Z");
+
+    for (file, count, executed, format, path) in [
+        (
+            "win7x86.bin",
+            91,
+            75,
+            "Windows7x86",
+            r"C:\Windows\system32\LogonUI.exe",
+        ),
+        (
+            "Win80.bin",
+            104,
+            88,
+            "Windows80_Windows2012",
+            r"SYSVOL\Windows\System32\LogonUI.exe",
+        ),
+        (
+            "win11shim.raw",
+            2,
+            0,
+            "Windows10C_11",
+            r"C:\WINDOWS\system32\wbem\WmiApSrv.exe",
+        ),
+    ] {
+        let r = run(&[
+            "parse-shimcache",
+            "-f",
+            &format!("{SHIMCACHE_DIR}/{file}"),
+            "-t",
+            "json",
+        ]);
+        assert_eq!(r.code, 0, "{}", r.stderr);
+        let entries = json_documents(&r.stdout);
+        assert_eq!(entries.len(), count, "{file}");
+        let ran = entries.iter().filter(|e| e["executed"] == true).count();
+        assert_eq!(ran, executed, "{file}");
+        assert_eq!(entries[0]["cache_format"], format, "{file}");
+        assert_eq!(entries[0]["path"], path, "{file}");
+    }
+    let r = run(&[
+        "parse-shimcache",
+        "-f",
+        &format!("{SHIMCACHE_DIR}/win11shim.raw"),
+        "-t",
+        "jsonl",
+    ]);
+    let w11: Value = serde_json::from_str(r.stdout.lines().next().unwrap()).unwrap();
+    assert_eq!(w11["executed"], false);
+    assert_eq!(w11["machine"], "x64");
+    assert_eq!(w11["data_size"], 136);
+    assert_eq!(w11["last_modified"], "2022-06-18T22:26:50.670515700Z");
+
+    // the summary of a value
+    let r = run(&[
+        "parse-shimcache",
+        "-f",
+        &format!("{SHIMCACHE_DIR}/WinXPx86.bin"),
+        "-K",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    for line in [
+        "AppCompatCache values parsed: 1",
+        "Caches: 1 (WindowsXP 1)",
+        "Entries: 17 (executed 0, not executed 0, no execution flag 17)",
+    ] {
+        assert!(r.stdout.contains(line), "{line}\n{}", r.stdout);
+    }
+    assert!(!r.stdout.contains("SYSTEM hives parsed"), "{}", r.stdout);
+}
+
+#[test]
+fn shimcache_input_and_output_errors() {
+    let r = run(&[
+        "parse-shimcache",
+        "-f",
+        "test_files/shimcache/missing",
+        "-K",
+    ]);
+    assert_eq!(r.code, 1);
+    assert!(r.stdout.contains("The file does not exist"), "{}", r.stdout);
+
+    let r = run(&["parse-shimcache", "-f", "test_files/lnk/README.md", "-K"]);
+    assert_eq!(r.code, 1);
+    assert!(
+        r.stdout.contains("Could not parse")
+            && r.stdout
+                .contains("neither a registry hive nor an AppCompatCache value"),
+        "{}",
+        r.stdout
+    );
+
+    let r = run(&["parse-shimcache", "-d", "test_files/lnk", "-K"]);
+    assert_eq!(r.code, 1);
+    assert!(r.stdout.contains("No SYSTEM hives"), "{}", r.stdout);
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("keep.csv");
+    std::fs::write(&file, b"keep").unwrap();
+    let value = format!("{SHIMCACHE_DIR}/win7x86.bin");
+    let r = run(&[
+        "parse-shimcache",
+        "-f",
+        &value,
+        "-o",
+        file.to_str().unwrap(),
+        "-K",
+    ]);
+    assert_eq!(r.code, 1);
+    assert!(r.stdout.contains("already exists"), "{}", r.stdout);
+    let r = run(&[
+        "parse-shimcache",
+        "-f",
+        &value,
+        "-o",
+        dir.path().to_str().unwrap(),
+        "-K",
+    ]);
+    assert_eq!(r.code, 1);
+    assert!(r.stdout.contains("is a directory"), "{}", r.stdout);
+}

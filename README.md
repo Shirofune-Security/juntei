@@ -15,6 +15,7 @@ not event logs.
 | SRUM (`SRUDB.dat`) | `parse-srum` | Supported |
 | Shortcuts (`*.lnk`) | `parse-lnk` | Supported |
 | Jump lists (`*.automaticDestinations-ms`, `*.customDestinations-ms`) | `parse-jump-lists` | Supported |
+| ShimCache / AppCompatCache (`SYSTEM` hive) | `parse-shimcache` | Supported |
 | More Windows artifacts | | Planned |
 
 ## Build
@@ -518,6 +519,73 @@ jump list and compound file code of Sootmark's [shell](https://github.com/Sootma
 on, every one of the 13,057 cells `parse-jump-lists` shares with JLECmd 2026.10 (times to 100 ns)
 has JLECmd's value, and the six files JLECmd refuses (empty custom lists, a missing footer, a file
 that isn't a jump list) are read or reported.
+
+### `parse-shimcache`
+
+Parses the ShimCache (AppCompatCache) of `SYSTEM` hives: the executables Windows checked for
+compatibility shims, most recently used first, with each file's path and last-modification time
+(the file's, not when it ran) and, from Windows 7 on, whether it was executed. Entries outlive the
+files: a cache keeps programs that were deleted, renamed or run from removable drives. Windows
+writes the cache when it shuts down, so the latest entries of a live system are not in it yet.
+
+```
+Input:
+  -d, --directory <DIR>  Directory to search recursively for SYSTEM hives
+  -f, --file <FILE>      File path to one SYSTEM hive, or an AppCompatCache value saved to a file
+      --no-logs          Read a dirty hive as it is, without its transaction logs (SYSTEM.LOG1, SYSTEM.LOG2)
+
+Output:
+  -o, --output <FILE>       Save every entry to a file
+  -t, --output-type <TYPE>  Output type: csv (default), json, jsonl. Without -o, the entries are written to stdout
+  -C, --clobber             Overwrite files when saving
+
+Display Settings:
+  -K, --no-color  Disable color output
+  -q, --quiet     Quiet mode: do not display the launch banner
+```
+
+```
+# Caches, entries, time range and findings on the terminal
+juntei parse-shimcache -f C/Windows/System32/config/SYSTEM
+
+# One CSV row per entry, with AppCompatCacheParser's columns, for every host of a triage collection
+juntei parse-shimcache -d triage/ -o shimcache.csv
+
+# Every field (flags, data, packaged app records, findings) as JSON Lines
+juntei parse-shimcache -f SYSTEM -t jsonl | jq .
+```
+
+- Every format from Windows XP to 11: XP, Server 2003 / Vista / 2008 (32 and 64 bit), 7 / 2008 R2
+  (32 and 64 bit), 8.0 / 2012, 8.1 / 2012 R2 and 10 / 11. Every control set with a cache is read
+  (`ControlSet001`, `ControlSet002`, …), and an entry already seen in an earlier one is marked
+  `Duplicate`.
+- A dirty hive (one Windows had not finished writing) is read with its transaction logs
+  (`SYSTEM.LOG1`, `SYSTEM.LOG2` next to it) applied, as Windows applies them when it loads the
+  hive; without them, entries may be missing, and the summary says so. Entries left in the slack
+  of the cache's value (dropped from the cache, Windows 8 to 11) are recovered (`FromSlack`).
+- CSV has Eric Zimmerman's AppCompatCacheParser's columns (`ControlSet` … `FromSlack`), with its
+  `Executed` (`Yes`, `No`, or `NA` where the format has no flag: Windows XP and 32-bit Vista), and
+  then `CacheFormat`, `CacheLastWrittenUTC` (when Windows last saved the cache), `InsertFlags`,
+  `ShimFlags`, `DataSize`, `Machine` (x64, x86, ARM64; Windows 10 and 11), `FileSize` and
+  `LastUpdateTimeUTC` (Windows XP), a packaged app's `PackageName`, `PackageVersion` and
+  `PackagePublisherId`, and `Findings`. Times are UTC (RFC 3339). JSON / JSONL have one object per
+  entry with every field, its data and the records in it.
+- `-f` also takes an AppCompatCache value on its own (its bytes, exported from the registry or
+  carved), read without a control set.
+- Findings on the terminal: Windows system binaries recorded outside `System32` / `SysWOW64`
+  (masquerading) and executables in directories commonly used to stage malware (Temp, Downloads,
+  `$Recycle.Bin`, …). A ShimCache entry shows that the file was there, and its execution flag
+  that it ran: findings are leads, not verdicts.
+- Damaged caches are read as far as they go and the damaged entries counted; a file that is
+  neither a hive nor a cache is reported and skipped.
+
+ShimCache parsing comes from Yamato Security's
+[ys-shimcache-parser](https://github.com/Yamato-Security/ys-shimcache-parser), a maintained fork
+of Security Ronin's [shimcache-forensic](https://github.com/SecurityRonin/shimcache-forensic)
+(Apache-2.0) with its own registry hive reader and transaction log replay. On the 20 public
+`SYSTEM` hives (24 control sets, 7,290 entries) and 17 AppCompatCache values it was compared on,
+every entry has the path, time, execution flag, flags and position Eric Zimmerman's
+AppCompatCacheParser 2026.10.1 gives it.
 
 ## License
 

@@ -40,6 +40,10 @@ shell = { package = "sootmark-shell", git = "https://github.com/Yamato-Security/
 # compound file code, MIT OR Apache-2.0), pinned to a commit; it reads links with the same
 # ys-lnk-parser commit as above.
 jumplist = { package = "ys-jump-lists", git = "https://github.com/Yamato-Security/ys-jump-lists-parser", rev = "0df5316f1687b14e330d7d64d644221f9a43f24e", features = ["codepages"] }
+# ShimCache parsing: Yamato Security's ys-shimcache-parser, a fork of Security Ronin's
+# shimcache-forensic (Apache-2.0), pinned to a commit: its own SYSTEM hive reader with
+# transaction log replay, every control set, and the findings.
+shimcache-forensic = { git = "https://github.com/Yamato-Security/ys-shimcache-parser", rev = "fc7e8e8837f7ca4481cf4fa1e21cea51d3e17914" }
 # The order of parse-srum's JSON columns, and parse-mft's JSON entries (as mft_dump writes them).
 serde = { version = "1", features = ["derive"] }
 # SRUM parsing: Yamato Security's ys-srum-parser, a fork of Sootmark's ese and srum crates
@@ -48,6 +52,8 @@ srum = { package = "sootmark-srum", git = "https://github.com/Yamato-Security/ys
 termcolor = "1"
 
 [dev-dependencies]
+# The SYSTEM hive of test_files/shimcache/ is kept gzipped.
+flate2 = "1"
 tempfile = "3"
 
 [profile.release]
