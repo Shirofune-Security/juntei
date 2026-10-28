@@ -104,8 +104,9 @@ for every field.
 ### `parse-mft`
 
 Parses the NTFS Master File Table (`$MFT`): one record per file and directory, including deleted
-ones, with the full path, flags, sizes, `$STANDARD_INFORMATION` and `$FILE_NAME` timestamps and
-alternate data streams.
+ones, with the full path, flags, sizes, `$STANDARD_INFORMATION` and `$FILE_NAME` timestamps,
+alternate data streams and the timestomping indicators. The CSV has the columns of Eric
+Zimmerman's MFTECmd, computed as MFTECmd computes them.
 
 ```
 Input:
@@ -117,9 +118,14 @@ Filtering:
 
 Output:
   -o, --output <PATH>                   Save every entry to a file (with -d: a directory with one file per $MFT)
-  -t, --output-type <TYPE>              Output type: csv (default), json, jsonl. Without -o, the entries are written to stdout
+  -t, --output-type <TYPE>              Output type: csv (default, MFTECmd's columns), mft-dump-csv, json, jsonl. Without -o, the entries are written to stdout
   -e, --extract-resident-streams <DIR>  Write the resident $DATA streams (the content of small files and alternate data streams) to files in DIR
   -C, --clobber                         Overwrite files when saving
+
+CSV Output:
+      --all-times      Write every $FILE_NAME time, not only those that differ from $STANDARD_INFORMATION (MFTECmd's --at)
+      --short-names    Write rows for DOS (8.3) names too (MFTECmd's --sn)
+      --cutoff <DATE>  Only records whose $STANDARD_INFORMATION created or modified time is on or after DATE, in UTC unless an offset is given (ex: 2025-10-19, 2025-10-19T13:45:30Z)
 
 Display Settings:
   -K, --no-color  Disable color output
@@ -130,8 +136,11 @@ Display Settings:
 # Entry counts (in use, deleted, directories, alternate data streams, damaged entries)
 juntei parse-mft -f '$MFT'
 
-# Every entry as CSV
+# Every file name and alternate data stream as CSV, with MFTECmd's columns
 juntei parse-mft -f '$MFT' -o mft.csv
+
+# Only what was created or modified since an incident began, every $FILE_NAME time included
+juntei parse-mft -f '$MFT' -o recent.csv --cutoff 2025-10-19 --all-times
 
 # The $MFT of every host in a triage collection, one JSONL file each
 juntei parse-mft -d triage/ -o mft-jsonl -t jsonl
@@ -143,14 +152,27 @@ juntei parse-mft -f '$MFT' -t jsonl -r 0-15,30
 juntei parse-mft -f '$MFT' -e resident-streams
 ```
 
-- Without `-o` or `-t`, only the summary is shown. CSV has one row per entry (the columns of
-  `mft_dump`, ending with the `$STANDARD_INFORMATION` and `$FILE_NAME` MFT-modified times); JSON /
-  JSONL have every attribute of every entry and its `full_path`. Times keep the 100 ns precision of
-  NTFS (7 decimal places).
+- Without `-o` or `-t`, only the summary is shown.
+- CSV has MFTECmd's 35 columns and rows, in its order (in-use records, then free ones): one row
+  per file name (hard links each have one; DOS 8.3 names only with `--short-names`) and one more
+  per alternate data stream (`IsAds`, with `ZoneIdContents` for `Zone.Identifier`). The columns
+  include the parent entry and sequence numbers, `ParentPath` as MFTECmd builds it (`.\Windows\System32`;
+  `.\PathUnknown\Directory with ID 0x…` when the chain doesn't reach the root), `FileName` and
+  `Extension`, both sets of four timestamps (the `0x30` ones only where they differ, unless
+  `--all-times`), `UpdateSequenceNumber`, `LogfileSequenceNumber`, `SecurityId`, `SiFlags`,
+  `NameType`, `ReferenceCount`, `ReparseTarget`, `ObjectIdFileDroid`, `LoggedUtilStream`, and the
+  timestomping indicators: `SI<FN` (`$STANDARD_INFORMATION` created before a different `$FILE_NAME`
+  created), `uSecZeros` (created or modified on a whole millisecond) and `Copied` (modified before
+  created). Times are RFC 3339 UTC with NTFS's 100 ns (`2007-06-30T12:50:52.2523952Z`), as in
+  juntei's other output; MFTECmd writes `2007-06-30 12:50:52.2523952`. `ParseErrors` holds
+  juntei's own descriptions of damaged records.
+- `-t mft-dump-csv` has `mft_dump`'s columns instead (one row per entry, ending with the
+  `$STANDARD_INFORMATION` and `$FILE_NAME` MFT-modified times). JSON / JSONL have every attribute
+  of every entry and its `full_path`. Times keep the 100 ns precision of NTFS (7 decimal places).
 - With `-d`, files named `$MFT` (or ending in `$MFT`) are parsed; `-o` is a directory with one
   file per `$MFT`, named after its path (`HOST1/C/$MFT` → `HOST1_C__MFT.csv`).
-- Full paths use `\`, as Windows shows them, with the long names that extension records hold. A
-  file whose parent directory's record was reused is `[Orphaned]` (unless the old directory left its
+- In `mft_dump`'s CSV and in JSON, full paths use `\`, as Windows shows them, with the long names
+  that extension records hold. A file whose parent directory's record was reused is `[Orphaned]` (unless the old directory left its
   name in an extension record); a deleted file in a deleted directory keeps its path; a parent that
   can't be read is `[Unknown]`.
 - Extracted streams are named `<full path>__<entry>-<sequence>_<stream number>_<stream name>.dontrun`
@@ -160,9 +182,12 @@ juntei parse-mft -f '$MFT' -e resident-streams
   skipped, a parent-reference loop is cut (an `[Orphaned]` path), and unreadable entries are
   counted.
 
-$MFT parsing and the CSV / JSON formats come from Yamato Security's
+$MFT parsing, `mft_dump`'s CSV and the JSON format come from Yamato Security's
 [ys-mft-parser](https://github.com/Yamato-Security/ys-mft-parser), a maintained fork of Omer
-Ben-Amram's [mft](https://github.com/omerbenamram/mft) crate (MIT / Apache-2.0).
+Ben-Amram's [mft](https://github.com/omerbenamram/mft) crate (MIT / Apache-2.0). On eight `$MFT`
+files (the mft crate's sample, the NIST hacking case and six from DFIRArtifactMuseum; 1,048,733
+rows), every row and column of the CSV, in order, equals MFTECmd 2026.10.6's (built from source),
+with and without `--all-times` and `--short-names` and with `--cutoff`, apart from the time format.
 
 ### `parse-prefetch`
 

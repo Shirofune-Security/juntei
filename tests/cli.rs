@@ -387,6 +387,66 @@ fn mft_csv_json_and_jsonl() {
     ]);
     assert_eq!(r.code, 0, "{}", r.stderr);
     assert!(r.stdout.contains("Results saved: "));
+    // One row per file name and per alternate data stream, as MFTECmd writes them
+    assert!(
+        r.stdout
+            .contains("CSV rows (file names and alternate data streams): 1,014"),
+        "{}",
+        r.stdout
+    );
+    let (header, rows) = csv_rows(&csv_path);
+    assert_eq!(
+        header[..6],
+        [
+            "EntryNumber",
+            "SequenceNumber",
+            "InUse",
+            "ParentEntryNumber",
+            "ParentSequenceNumber",
+            "ParentPath"
+        ]
+    );
+    assert_eq!(header.len(), 35);
+    assert_eq!(rows.len(), 1014);
+    let row = |entry: &str, name: &str| {
+        rows.iter()
+            .find(|r| r["EntryNumber"] == entry && r["FileName"] == name)
+            .unwrap_or_else(|| panic!("{entry} {name}"))
+    };
+    assert_eq!(row("30", "config")["ParentPath"], r".\WINDOWS\system32");
+    // $STANDARD_INFORMATION created before $FILE_NAME created, on a whole second
+    let bootvid = row("178", "bootvid.dll");
+    for (column, value) in [
+        ("Extension", ".dll"),
+        ("FileSize", "12288"),
+        ("SI<FN", "True"),
+        ("uSecZeros", "True"),
+        ("Copied", "False"),
+        ("SiFlags", "Archive"),
+        ("NameType", "DosWindows"),
+        ("Created0x10", "2006-02-28T12:00:00.0000000Z"),
+        ("Created0x30", "2007-06-30T12:51:00.8147072Z"),
+    ] {
+        assert_eq!(bootvid[column], value, "{column}");
+    }
+    let ads = row("8", "$BadClus:$Bad");
+    assert_eq!(ads["IsAds"], "True");
+    assert_eq!(ads["FileSize"], "1261821952");
+    assert_eq!(row("8", "$BadClus")["HasAds"], "True");
+
+    // mft_dump's columns: one row per entry
+    let r = run(&[
+        "parse-mft",
+        "-f",
+        MFT,
+        "-o",
+        csv_path.to_str().unwrap(),
+        "-t",
+        "mft-dump-csv",
+        "-C",
+        "-K",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
     let text = std::fs::read_to_string(&csv_path).unwrap();
     assert!(text.starts_with(
         "Signature,EntryId,Sequence,BaseEntryId,BaseEntrySequence,HardLinkCount,Flags,"
@@ -443,6 +503,59 @@ fn mft_csv_json_and_jsonl() {
 }
 
 #[test]
+fn mft_csv_options() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("mft.csv");
+    let csv = |extra: &[&str]| {
+        let mut args = vec![
+            "parse-mft",
+            "-f",
+            MFT,
+            "-o",
+            out.to_str().unwrap(),
+            "-C",
+            "-K",
+        ];
+        args.extend_from_slice(extra);
+        let r = run(&args);
+        assert_eq!(r.code, 0, "{}", r.stdout);
+        csv_rows(&out).1
+    };
+    // $FILE_NAME times only where they differ from $STANDARD_INFORMATION, unless --all-times
+    let mft = |rows: &[std::collections::HashMap<String, String>]| {
+        rows.iter()
+            .find(|r| r["FileName"] == "$MFT")
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(mft(&csv(&[]))["Created0x30"], "");
+    assert_eq!(
+        mft(&csv(&["--all-times"]))["Created0x30"],
+        "2007-06-30T12:50:52.2523952Z"
+    );
+    // DOS (8.3) names get rows of their own with --short-names
+    let rows = csv(&["--short-names"]);
+    assert_eq!(rows.len(), 1041);
+    assert_eq!(rows.iter().filter(|r| r["NameType"] == "Dos").count(), 27);
+    // only records created or modified on or after the cutoff (MFTECmd gives the same 8 rows)
+    let rows = csv(&["--cutoff", "2007-07-01"]);
+    assert_eq!(rows.len(), 8);
+    assert_eq!(rows[0]["LastModified0x10"], "2009-01-19T04:17:44.7268320Z");
+    assert_eq!(csv(&["--cutoff", "2007-07-01T09:00:00+09:00"]).len(), 8);
+
+    let r = run(&["parse-mft", "-f", MFT, "-t", "jsonl", "--short-names"]);
+    assert_eq!(r.code, 1);
+    assert!(
+        r.stderr.contains("options of the CSV output"),
+        "{}",
+        r.stderr
+    );
+    let r = run(&["parse-mft", "-f", MFT, "--cutoff", "yesterday", "-K"]);
+    assert_ne!(r.code, 0);
+    assert!(r.stderr.contains("is not a date or time"), "{}", r.stderr);
+}
+
+#[test]
 fn mft_resident_streams_and_directory_mode() {
     let tree = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(tree.path().join("HOST1/C")).unwrap();
@@ -478,7 +591,15 @@ fn mft_resident_streams_and_directory_mode() {
     );
     for name in ["HOST1_C__MFT", "HOST2__MFT"] {
         let text = std::fs::read_to_string(csv_dir.join(format!("{name}.csv"))).unwrap();
-        assert_eq!(full_paths(&text).len(), 1016, "{name}");
+        assert!(
+            text.starts_with("EntryNumber,SequenceNumber,InUse,"),
+            "{name}"
+        );
+        assert_eq!(
+            csv_rows(&csv_dir.join(format!("{name}.csv"))).1.len(),
+            1014,
+            "{name}"
+        );
         assert_eq!(
             std::fs::read_dir(streams.join(name)).unwrap().count(),
             22,
@@ -567,6 +688,30 @@ fn mft_damaged_inputs_do_not_stop_the_run() {
         r.stdout
     );
     assert!(r.stdout.contains("Entries: 1,016"), "{}", r.stdout);
+    // the CSV's parent paths of the loop end in MFTECmd's PathUnknown
+    let out = dir.path().join("cycle.csv");
+    let r = run(&[
+        "parse-mft",
+        "-f",
+        cycle.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "-K",
+        "-q",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stdout);
+    let (_, rows) = csv_rows(&out);
+    let looped: Vec<_> = rows
+        .iter()
+        .filter(|r| r["EntryNumber"] == a.to_string() || r["EntryNumber"] == b.to_string())
+        .collect();
+    assert_eq!(looped.len(), 2);
+    assert!(
+        looped
+            .iter()
+            .all(|r| r["ParentPath"].starts_with(r".\PathUnknown\Directory with ID 0x")),
+        "{looped:?}"
+    );
 
     let r = run(&["parse-mft", "-f", "README.md", "-K", "-q"]);
     assert_eq!(r.code, 1);

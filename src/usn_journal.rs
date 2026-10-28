@@ -383,16 +383,6 @@ fn reference_json(r: Reference) -> Value {
     }
 }
 
-/// The extension of a file name, with its dot (`.dll`), as MFTECmd gives it (.NET's
-/// `Path.GetExtension`: from the last dot, the whole name when it starts with one, nothing when
-/// the dot is last).
-fn extension(name: &str) -> &str {
-    match name.rfind('.') {
-        Some(at) if at + 1 < name.len() => &name[at..],
-        _ => "",
-    }
-}
-
 const CSV_HEADER: &[&str] = &[
     "Name",
     "Extension",
@@ -440,7 +430,7 @@ impl RecordWriter {
                 let (parent_entry, parent_sequence) = entry_and_sequence(r.parent);
                 w.write_record([
                     r.name.as_str(),
-                    extension(&r.name),
+                    util::dotnet_extension(&r.name),
                     &entry,
                     &sequence,
                     &parent_entry,
@@ -733,11 +723,11 @@ mod tests {
 
     #[test]
     fn extensions_and_flags() {
-        assert_eq!(extension("psapi.dll"), ".dll");
-        assert_eq!(extension("archive.tar.gz"), ".gz");
-        assert_eq!(extension(".NET Framework"), ".NET Framework");
-        assert_eq!(extension("README"), "");
-        assert_eq!(extension("trailing."), "");
+        assert_eq!(util::dotnet_extension("psapi.dll"), ".dll");
+        assert_eq!(util::dotnet_extension("archive.tar.gz"), ".gz");
+        assert_eq!(util::dotnet_extension(".NET Framework"), ".NET Framework");
+        assert_eq!(util::dotnet_extension("README"), "");
+        assert_eq!(util::dotnet_extension("trailing."), "");
         assert_eq!(
             reasons(Reasons::from_bits(0x8000_0100)),
             "FILE_CREATE|CLOSE"

@@ -184,8 +184,10 @@ impl AmcacheOptions {
 /// What `parse-mft` writes.
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MftOutputType {
-    /// One row per entry (the columns of mft_dump)
+    /// One row per file name and per alternate data stream (the columns of MFTECmd)
     Csv,
+    /// One row per entry (the columns of mft_dump)
+    MftDumpCsv,
     /// One pretty-printed JSON object per entry
     Json,
     /// One JSON object per line
@@ -195,7 +197,7 @@ pub enum MftOutputType {
 impl MftOutputType {
     pub fn extension(&self) -> &'static str {
         match self {
-            MftOutputType::Csv => "csv",
+            MftOutputType::Csv | MftOutputType::MftDumpCsv => "csv",
             MftOutputType::Json => "json",
             MftOutputType::Jsonl => "jsonl",
         }
@@ -260,7 +262,7 @@ pub struct MftOptions {
     #[arg(help_heading = Some("Output"), short = 'o', long, value_name = "PATH", display_order = 300)]
     pub output: Option<PathBuf>,
 
-    /// Output type: csv (default), json, jsonl. Without -o, the entries are written to stdout
+    /// Output type: csv (default, MFTECmd's columns), mft-dump-csv, json, jsonl. Without -o, the entries are written to stdout
     #[arg(help_heading = Some("Output"), short = 't', long = "output-type", value_name = "TYPE", value_enum, hide_possible_values = true, display_order = 301)]
     pub output_type: Option<MftOutputType>,
 
@@ -272,11 +274,37 @@ pub struct MftOptions {
     #[arg(help_heading = Some("Output"), short = 'C', long, display_order = 303)]
     pub clobber: bool,
 
+    /// Write every $FILE_NAME time, not only those that differ from $STANDARD_INFORMATION (MFTECmd's --at)
+    #[arg(help_heading = Some("CSV Output"), long, display_order = 400)]
+    pub all_times: bool,
+
+    /// Write rows for DOS (8.3) names too (MFTECmd's --sn)
+    #[arg(help_heading = Some("CSV Output"), long, display_order = 401)]
+    pub short_names: bool,
+
+    /// Only records whose $STANDARD_INFORMATION created or modified time is on or after DATE, in UTC unless an offset is given (ex: 2025-10-19, 2025-10-19T13:45:30Z)
+    #[arg(help_heading = Some("CSV Output"), long, value_name = "DATE", value_parser = crate::mftecmd::parse_cutoff, display_order = 402)]
+    pub cutoff: Option<i64>,
+
     #[clap(flatten)]
     pub common: CommonOptions,
 }
 
 impl MftOptions {
+    /// The options of the MFTECmd CSV.
+    pub fn mftecmd(&self) -> crate::mftecmd::Options {
+        crate::mftecmd::Options {
+            all_times: self.all_times,
+            short_names: self.short_names,
+            cutoff: self.cutoff,
+        }
+    }
+
+    /// Whether an option of the MFTECmd CSV is given.
+    pub fn has_csv_options(&self) -> bool {
+        self.all_times || self.short_names || self.cutoff.is_some()
+    }
+
     pub fn output_type(&self) -> MftOutputType {
         self.output_type.unwrap_or(MftOutputType::Csv)
     }
