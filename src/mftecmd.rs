@@ -695,7 +695,8 @@ pub fn write<R: Read + Seek>(
     Ok(written)
 }
 
-/// The rows of one base record, with its extension records' attributes after its own.
+/// The rows of one base record, with its extension records' attributes after its own (and their
+/// problems after its own in `ParseErrors`).
 fn write_record<R: Read + Seek>(
     parser: &mut MftParser<R>,
     index: &Index,
@@ -714,6 +715,15 @@ fn write_record<R: Read + Seek>(
                 .ok()
                 .and_then(|e| Record::of(&e, *position))
             {
+                // Extension records have no rows of their own: their damage is reported in the
+                // base record's rows.
+                let number = extension.entry;
+                record.errors.extend(
+                    extension
+                        .errors
+                        .into_iter()
+                        .map(|e| format!("extension record {number}: {e}")),
+                );
                 record.attrs.extend(extension.attrs);
             }
         }

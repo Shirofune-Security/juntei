@@ -615,6 +615,45 @@ fn mft_csv_reports_damaged_attributes() {
 }
 
 #[test]
+fn mft_csv_reports_damaged_extension_records() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut data = std::fs::read(repo(MFT)).unwrap();
+    // entry 226 (a small file with a resident $DATA at 0x100) becomes an extension record of
+    // entry 209 (system.ini, sequence 1), and the value of its $DATA runs past the end
+    let extension = 226 * 1024;
+    data[extension + 0x20..][..8].copy_from_slice(&(209u64 | (1 << 48)).to_le_bytes());
+    data[extension + 0x100 + 0x14..][..2].copy_from_slice(&0x3F0u16.to_le_bytes());
+    let damaged = dir.path().join("damaged_$MFT");
+    std::fs::write(&damaged, &data).unwrap();
+    let out = dir.path().join("mft.csv");
+    let r = run(&[
+        "parse-mft",
+        "-f",
+        damaged.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "-r",
+        "209,226",
+        "-K",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stdout);
+    let (_, rows) = csv_rows(&out);
+    // the extension record has no rows of its own; its name is a name of entry 209
+    assert!(rows.iter().all(|r| r["EntryNumber"] == "209"), "{rows:?}");
+    assert_eq!(rows.len(), 2);
+    for row in &rows {
+        assert_eq!(
+            row["ParseErrors"],
+            "extension record 226: $DATA attribute at 0x100 left out: its value (0x1DD bytes at 0x3F0) runs past the end of the attribute",
+            "{}",
+            row["FileName"]
+        );
+        // the base record's own $DATA gives the size
+        assert_eq!(row["FileSize"], "231");
+    }
+}
+
+#[test]
 fn mft_resident_streams_and_directory_mode() {
     let tree = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(tree.path().join("HOST1/C")).unwrap();

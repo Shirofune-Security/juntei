@@ -165,7 +165,8 @@ juntei parse-mft -f '$MFT' -e resident-streams
   created), `uSecZeros` (created or modified on a whole millisecond) and `Copied` (modified before
   created). Times are RFC 3339 UTC with NTFS's 100 ns (`2007-06-30T12:50:52.2523952Z`), as in
   juntei's other output; MFTECmd writes `2007-06-30 12:50:52.2523952`. `ParseErrors` holds
-  juntei's own descriptions of damaged records.
+  juntei's own descriptions of damaged records and of their extension records (MFTECmd leaves
+  the extension records' out).
 - `-t mft-dump-csv` has `mft_dump`'s columns instead (one row per entry, ending with the
   `$STANDARD_INFORMATION` and `$FILE_NAME` MFT-modified times). JSON / JSONL have every attribute
   of every entry and its `full_path`. Times keep the 100 ns precision of NTFS (7 decimal places).
