@@ -62,6 +62,16 @@ pub enum Commands {
         disable_version_flag = true
     )]
     ParseUsnJournal(UsnJournalOptions),
+
+    /// Parse SRUM (SRUDB.dat): about 30 days of network and resource usage per program and user
+    #[command(
+        author = AUTHOR,
+        version = VERSION,
+        help_template = "\nVersion: {version}\n{author-with-newline}\n{usage-heading}\n  juntei parse-srum <INPUT> [OPTIONS]\n\n{all-args}",
+        disable_help_flag = true,
+        disable_version_flag = true
+    )]
+    ParseSrum(SrumOptions),
 }
 
 #[derive(Args, Clone, Debug, Default)]
@@ -387,6 +397,74 @@ impl UsnJournalOptions {
     }
 }
 
+/// What `parse-srum` writes.
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SrumOutputType {
+    /// One CSV table per provider (SrumECmd's tables) in a directory
+    Csv,
+    /// One pretty-printed JSON object per entry
+    Json,
+    /// One JSON object per line
+    Jsonl,
+}
+
+impl SrumOutputType {
+    pub fn extension(&self) -> &'static str {
+        match self {
+            SrumOutputType::Csv => "csv",
+            SrumOutputType::Json => "json",
+            SrumOutputType::Jsonl => "jsonl",
+        }
+    }
+}
+
+#[derive(Args, Clone, Debug, Default)]
+#[clap(group(ArgGroup::new("input").args(["directory", "filepath"]).required(true).multiple(false)))]
+pub struct SrumOptions {
+    /// Directory to search recursively for SRUM databases (SRUDB.dat)
+    #[arg(help_heading = Some("Input"), short = 'd', long, value_name = "DIR", display_order = 100)]
+    pub directory: Option<PathBuf>,
+
+    /// File path to one SRUM database (SRUDB.dat)
+    #[arg(help_heading = Some("Input"), short = 'f', long = "file", value_name = "FILE", display_order = 101)]
+    pub filepath: Option<PathBuf>,
+
+    /// The SOFTWARE hive, for account and Wi-Fi names (default: config/SOFTWARE of the same Windows, or a SOFTWARE next to the database)
+    #[arg(help_heading = Some("Input"), short = 'r', long = "software", value_name = "FILE", conflicts_with = "directory", display_order = 102)]
+    pub software: Option<PathBuf>,
+
+    /// Save every entry: a directory of CSV tables, or a file (json, jsonl; with -d a directory with one file per database)
+    #[arg(help_heading = Some("Output"), short = 'o', long, value_name = "PATH", display_order = 300)]
+    pub output: Option<PathBuf>,
+
+    /// Output type: csv (default), json, jsonl. Without -o, json and jsonl entries are written to stdout
+    #[arg(help_heading = Some("Output"), short = 't', long = "output-type", value_name = "TYPE", value_enum, hide_possible_values = true, display_order = 301)]
+    pub output_type: Option<SrumOutputType>,
+
+    /// Overwrite files when saving
+    #[arg(help_heading = Some("Output"), short = 'C', long, display_order = 302)]
+    pub clobber: bool,
+
+    #[clap(flatten)]
+    pub common: CommonOptions,
+}
+
+impl SrumOptions {
+    pub fn output_type(&self) -> SrumOutputType {
+        self.output_type.unwrap_or(SrumOutputType::Csv)
+    }
+
+    /// Entries on stdout (`-t json` or `-t jsonl` without `-o`): nothing but the data may be
+    /// printed there. CSV tables need a directory.
+    pub fn data_on_stdout(&self) -> bool {
+        self.output.is_none()
+            && matches!(
+                self.output_type,
+                Some(SrumOutputType::Json | SrumOutputType::Jsonl)
+            )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -522,6 +600,37 @@ mod tests {
         assert!(
             parse(&["-d", "triage", "--carve"]).is_err(),
             "--carve needs -f"
+        );
+    }
+
+    #[test]
+    fn srum_options() {
+        let parse = |a: &[&str]| {
+            let mut argv = vec!["juntei", "parse-srum"];
+            argv.extend_from_slice(a);
+            Cli::try_parse_from(argv).map(|c| match c.cmd {
+                Commands::ParseSrum(o) => o,
+                _ => panic!(),
+            })
+        };
+        let o = parse(&["-f", "SRUDB.dat"]).unwrap();
+        assert_eq!(o.output_type(), SrumOutputType::Csv);
+        assert!(!o.data_on_stdout());
+        assert!(
+            parse(&["-f", "SRUDB.dat", "-t", "jsonl"])
+                .unwrap()
+                .data_on_stdout()
+        );
+        assert!(
+            !parse(&["-f", "SRUDB.dat", "-t", "csv"])
+                .unwrap()
+                .data_on_stdout(),
+            "csv cannot go to stdout: an error is printed instead"
+        );
+        assert!(parse(&["-f", "SRUDB.dat", "-r", "SOFTWARE"]).is_ok());
+        assert!(
+            parse(&["-d", "triage", "-r", "SOFTWARE"]).is_err(),
+            "-r needs -f"
         );
     }
 }

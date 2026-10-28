@@ -1057,3 +1057,560 @@ fn usn_records_are_carved_from_other_data() {
     );
     assert!(r.stdout.contains("Paths: none (no $MFT given)"));
 }
+
+// --- parse-srum --------------------------------------------------------------------------------
+
+const SRUM_WIN10: &str = "test_files/srum/win10_rathbunvm_SRUDB.dat";
+const SRUM_SERVER: &str = "test_files/srum/server2022_aptsimulatorvm_SRUDB.dat";
+/// The account most of the Windows 10 database's entries are for.
+const RATHBUN_SID: &str = "S-1-5-21-2290304894-658537038-505560459-1000";
+
+/// A registry key of the hives the SRUM tests build: its name, values (name, type, data) and
+/// subkeys.
+struct RegKey {
+    name: String,
+    values: Vec<(String, u32, Vec<u8>)>,
+    subkeys: Vec<RegKey>,
+}
+
+fn reg_key(name: &str, values: Vec<(&str, u32, Vec<u8>)>, subkeys: Vec<RegKey>) -> RegKey {
+    RegKey {
+        name: name.to_string(),
+        values: values
+            .into_iter()
+            .map(|(n, t, d)| (n.to_string(), t, d))
+            .collect(),
+        subkeys,
+    }
+}
+
+const REG_EXPAND_SZ: u32 = 2;
+const REG_BINARY: u32 = 3;
+const REG_DWORD: u32 = 4;
+
+fn utf16z(s: &str) -> Vec<u8> {
+    s.encode_utf16()
+        .chain([0])
+        .flat_map(u16::to_le_bytes)
+        .collect()
+}
+
+fn put_u32(buf: &mut [u8], at: usize, v: u32) {
+    buf[at..at + 4].copy_from_slice(&v.to_le_bytes());
+}
+
+/// Append a cell (its size, negative: allocated) holding `data`; its offset in the hive bins.
+fn alloc_cell(cells: &mut Vec<u8>, data: &[u8]) -> u32 {
+    let at = cells.len();
+    let size = (4 + data.len()).next_multiple_of(8);
+    cells.extend_from_slice(&(-(size as i32)).to_le_bytes());
+    cells.extend_from_slice(data);
+    cells.resize(at + size, 0);
+    at as u32
+}
+
+/// Write a key node with its values and subkeys (an `lf` list, sorted); its offset.
+fn write_key(cells: &mut Vec<u8>, key: &RegKey, parent: u32, root: bool) -> u32 {
+    let mut nk = vec![0u8; 76];
+    nk[0..2].copy_from_slice(b"nk");
+    // KEY_COMP_NAME (an ASCII name), and for the root KEY_HIVE_ENTRY | KEY_NO_DELETE
+    nk[2..4].copy_from_slice(&(if root { 0x2cu16 } else { 0x20 }).to_le_bytes());
+    put_u32(&mut nk, 16, parent);
+    for unset in [28, 32, 40, 44, 48] {
+        put_u32(&mut nk, unset, u32::MAX);
+    }
+    nk[72..74].copy_from_slice(&(key.name.len() as u16).to_le_bytes());
+    nk.extend_from_slice(key.name.as_bytes());
+    let at = alloc_cell(cells, &nk);
+    let field = at as usize + 4;
+    if !key.values.is_empty() {
+        let mut list = Vec::new();
+        for (name, kind, data) in &key.values {
+            let mut vk = vec![0u8; 20];
+            vk[0..2].copy_from_slice(b"vk");
+            vk[2..4].copy_from_slice(&(name.len() as u16).to_le_bytes());
+            if data.len() <= 4 {
+                // resident: the data is in the offset field
+                put_u32(&mut vk, 4, data.len() as u32 | 0x8000_0000);
+                vk[8..8 + data.len()].copy_from_slice(data);
+            } else {
+                put_u32(&mut vk, 4, data.len() as u32);
+                let data_at = alloc_cell(cells, data);
+                put_u32(&mut vk, 8, data_at);
+            }
+            put_u32(&mut vk, 12, *kind);
+            vk[16..18].copy_from_slice(&1u16.to_le_bytes()); // VALUE_COMP_NAME
+            vk.extend_from_slice(name.as_bytes());
+            list.extend_from_slice(&alloc_cell(cells, &vk).to_le_bytes());
+        }
+        let list_at = alloc_cell(cells, &list);
+        put_u32(cells, field + 36, key.values.len() as u32);
+        put_u32(cells, field + 40, list_at);
+    }
+    if !key.subkeys.is_empty() {
+        let mut subkeys: Vec<&RegKey> = key.subkeys.iter().collect();
+        subkeys.sort_by_key(|k| k.name.to_ascii_uppercase());
+        let mut lf = b"lf".to_vec();
+        lf.extend_from_slice(&(subkeys.len() as u16).to_le_bytes());
+        for sub in subkeys {
+            let sub_at = write_key(cells, sub, at, false);
+            lf.extend_from_slice(&sub_at.to_le_bytes());
+            let mut hint = [0u8; 4];
+            for (h, b) in hint.iter_mut().zip(sub.name.bytes()) {
+                *h = b;
+            }
+            lf.extend_from_slice(&hint);
+        }
+        let lf_at = alloc_cell(cells, &lf);
+        put_u32(cells, field + 20, key.subkeys.len() as u32);
+        put_u32(cells, field + 28, lf_at);
+    }
+    at
+}
+
+/// A registry hive (REGF 1.5, one hive bin) holding `root`.
+fn regf(root: &RegKey) -> Vec<u8> {
+    let mut cells = vec![0u8; 32]; // the hive bin's header
+    let root_at = write_key(&mut cells, root, 0, true);
+    let size = (cells.len() + 8).next_multiple_of(4096);
+    let free = size - cells.len();
+    cells.extend_from_slice(&(free as i32).to_le_bytes());
+    cells.resize(size, 0);
+    cells[0..4].copy_from_slice(b"hbin");
+    put_u32(&mut cells, 8, size as u32);
+    let mut base = vec![0u8; 4096];
+    base[0..4].copy_from_slice(b"regf");
+    for (at, v) in [(4, 1), (8, 1), (20, 1), (24, 5), (32, 1), (44, 1)] {
+        put_u32(&mut base, at, v);
+    }
+    put_u32(&mut base, 36, root_at);
+    put_u32(&mut base, 40, size as u32);
+    let checksum = base[..508]
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .fold(0u32, |x, w| x ^ u32::from_le_bytes(*w));
+    put_u32(&mut base, 508, checksum);
+    base.extend_from_slice(&cells);
+    base
+}
+
+/// A Wi-Fi profile key: its index and a `Channel Hints` value declaring `length` bytes of SSID.
+fn wifi_profile(guid: &str, index: u32, length: i32, ssid: &[u8]) -> RegKey {
+    let mut hints = length.to_le_bytes().to_vec();
+    hints.extend_from_slice(ssid);
+    hints.resize(hints.len().max(36), 0);
+    reg_key(
+        guid,
+        vec![("ProfileIndex", REG_DWORD, index.to_le_bytes().to_vec())],
+        vec![reg_key(
+            "MetaData",
+            vec![("Channel Hints", REG_BINARY, hints)],
+            vec![],
+        )],
+    )
+}
+
+/// A SOFTWARE hive naming two accounts and two Wi-Fi networks, with a profile left without
+/// metadata, one whose index another profile already took (the first one names it, as in
+/// SrumECmd), and one whose `Channel Hints` is damaged. Index 0 is the `L2ProfileId` of the Windows
+/// 10 database's network entries.
+fn software_hive() -> Vec<u8> {
+    let profile = |sid: &str, image: &str| {
+        reg_key(
+            sid,
+            vec![("ProfileImagePath", REG_EXPAND_SZ, utf16z(image))],
+            vec![],
+        )
+    };
+    let profiles = reg_key(
+        "ProfileList",
+        vec![],
+        vec![
+            profile("S-1-5-19", r"%systemroot%\ServiceProfiles\LocalService"),
+            profile(RATHBUN_SID, r"C:\Users\rathbun"),
+        ],
+    );
+    let wlan_profiles = reg_key(
+        "Profiles",
+        vec![],
+        vec![
+            wifi_profile("{1A}", 0, 10, b"CoffeeShop"),
+            wifi_profile("{1B}", 0, 6, b"Second"),
+            wifi_profile("{1C}", 8, 4, b"Home"),
+            wifi_profile("{1D}", 9, 40, b"Broken"),
+            reg_key(
+                "{1E}",
+                vec![("ProfileIndex", REG_DWORD, 10u32.to_le_bytes().to_vec())],
+                vec![],
+            ),
+        ],
+    );
+    let microsoft = reg_key(
+        "Microsoft",
+        vec![],
+        vec![
+            reg_key(
+                "Windows NT",
+                vec![],
+                vec![reg_key("CurrentVersion", vec![], vec![profiles])],
+            ),
+            reg_key(
+                "WlanSvc",
+                vec![],
+                vec![reg_key(
+                    "Interfaces",
+                    vec![],
+                    vec![reg_key("{0F00}", vec![], vec![wlan_profiles])],
+                )],
+            ),
+        ],
+    );
+    regf(&reg_key("ROOT", vec![], vec![microsoft]))
+}
+
+/// The rows of a CSV file, by column name.
+fn csv_rows(path: &Path) -> (Vec<String>, Vec<std::collections::HashMap<String, String>>) {
+    let mut reader = csv::Reader::from_path(path).unwrap();
+    let header: Vec<String> = reader.headers().unwrap().iter().map(String::from).collect();
+    let rows = reader
+        .records()
+        .map(|r| {
+            header
+                .iter()
+                .cloned()
+                .zip(r.unwrap().iter().map(String::from))
+                .collect()
+        })
+        .collect();
+    (header, rows)
+}
+
+#[test]
+fn srum_summary_on_the_terminal() {
+    let r = run(&["parse-srum", "-f", SRUM_WIN10, "-K"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    for line in [
+        "SRUM databases parsed: 1",
+        "Entries: 309",
+        "  AppResourceUseInfo: 118",
+        "  AppTimelineProvider: 163",
+        "  NetworkConnections: 1",
+        "  NetworkUsages: 23",
+        "  vfuprov: 4",
+        "Time range: 2022-02-05T22:19:00Z - 2022-02-05T22:19:00Z",
+        "Network: 1.8 MiB sent, 141.8 MiB received",
+        "Top senders:",
+        "   262.1 KiB  LicenseManager",
+        "Account and Wi-Fi names: none (no SOFTWARE hive found; give one with -r)",
+        "6 AppId / UserId values are not in SruDbIdMapTable",
+        "To save every entry, add -o <DIR>",
+    ] {
+        assert!(r.stdout.contains(line), "{line}\n{}", r.stdout);
+    }
+    assert!(!r.stdout.contains("Left dirty"));
+}
+
+#[test]
+fn srum_csv_tables_with_names_from_the_software_hive() {
+    let dir = tempfile::tempdir().unwrap();
+    let hive = dir.path().join("SOFTWARE");
+    std::fs::write(&hive, software_hive()).unwrap();
+    let out = dir.path().join("out");
+    let hive_arg = hive.to_str().unwrap();
+    let r = run(&[
+        "parse-srum",
+        "-f",
+        SRUM_WIN10,
+        "-r",
+        hive_arg,
+        "-o",
+        out.to_str().unwrap(),
+        "-K",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stdout);
+    assert!(
+        r.stdout.contains(
+            "Account and Wi-Fi names: from the SOFTWARE hive (2 accounts, 2 Wi-Fi networks)"
+        ),
+        "{}",
+        r.stdout
+    );
+    assert!(
+        r.stdout
+            .contains(r"Wi-Fi profile {0F00}\{1D}: Channel Hints says the name has 40 bytes"),
+        "{}",
+        r.stdout
+    );
+    assert!(r.stdout.contains("(6 CSV files)"), "{}", r.stdout);
+    let mut files: Vec<String> = std::fs::read_dir(&out)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+        .collect();
+    files.sort();
+    assert_eq!(
+        files,
+        [
+            "AppResourceUseInfo.csv",
+            "AppTimelineProvider.csv",
+            "NetworkConnections.csv",
+            "NetworkUsages.csv",
+            "SruDbIdMapTable.csv",
+            "vfuprov.csv"
+        ]
+    );
+
+    let (header, rows) = csv_rows(&out.join("NetworkUsages.csv"));
+    assert_eq!(
+        header,
+        [
+            "Id",
+            "Timestamp",
+            "ExeInfo",
+            "ExeInfoDescription",
+            "ExeTimestamp",
+            "AppType",
+            "Sid",
+            "UserName",
+            "UserId",
+            "AppId",
+            "InterfaceLuid",
+            "InterfaceType",
+            "L2ProfileId",
+            "ProfileName",
+            "L2ProfileFlags",
+            "BytesSent",
+            "BytesRecvd"
+        ]
+    );
+    assert_eq!(rows.len(), 23);
+    let first = &rows[0];
+    for (column, value) in [
+        ("Id", "1"),
+        ("Timestamp", "2022-02-05T22:19:00Z"),
+        ("ExeInfo", "wlidsvc"),
+        ("AppType", "Service"),
+        ("Sid", "S-1-5-19"),
+        ("UserName", "LocalService"),
+        ("InterfaceType", "IF_TYPE_ETHERNET_CSMACD"),
+        ("ProfileName", "CoffeeShop"),
+        ("BytesSent", "11988"),
+        ("BytesRecvd", "12755"),
+    ] {
+        assert_eq!(first[column], value, "{column}");
+    }
+    let rathbun: Vec<_> = rows.iter().filter(|r| r["Sid"] == RATHBUN_SID).collect();
+    assert!(!rathbun.is_empty());
+    assert!(rathbun.iter().all(|r| r["UserName"] == "rathbun"));
+
+    // `!!name!time!x!description` names split; FILETIME columns as times
+    let (_, timeline) = csv_rows(&out.join("AppTimelineProvider.csv"));
+    let split = timeline
+        .iter()
+        .find(|r| r["ExeInfoDescription"] == "[LocalService] [WdiServiceHost]")
+        .unwrap();
+    assert_eq!(split["ExeInfo"], "svchost.exe");
+    assert_eq!(split["ExeTimestamp"], "1972-12-14T16:22:50Z");
+    assert_eq!(split["EndTime"], "2022-02-05T22:18:49.336199700Z");
+    assert!(
+        timeline
+            .iter()
+            .all(|r| r["EndTime"].starts_with("2022-02-"))
+    );
+    let (_, ids) = csv_rows(&out.join("SruDbIdMapTable.csv"));
+    assert_eq!(ids.len(), 288);
+    assert_eq!(ids[3]["IdBlob"], "S-1-5-19");
+
+    // existing results are kept without -C
+    let again = run(&["parse-srum", "-f", SRUM_WIN10, "-o", out.to_str().unwrap()]);
+    assert_eq!(again.code, 1);
+    assert!(again.stdout.contains("already exists"), "{}", again.stdout);
+}
+
+#[test]
+fn srum_json_and_jsonl() {
+    let r = run(&["parse-srum", "-f", SRUM_WIN10, "-t", "jsonl"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(!r.stdout.contains("Results Summary"));
+    let lines: Vec<&str> = r.stdout.lines().collect();
+    assert_eq!(lines.len(), 309);
+    // the columns keep their order
+    assert!(
+        lines[0]
+            .starts_with(r#"{"SourceFile":"test_files/srum/win10_rathbunvm_SRUDB.dat","Table":"#)
+    );
+    let entries: Vec<Value> = lines
+        .iter()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let connection = entries
+        .iter()
+        .find(|e| e["Provider"] == "NetworkConnections")
+        .unwrap();
+    assert_eq!(
+        connection["Table"],
+        "{DD6636C4-8929-4683-974E-22C046A43763}"
+    );
+    assert!(
+        connection["ConnectStartTime"]
+            .as_str()
+            .unwrap()
+            .starts_with("20")
+    );
+    assert!(connection["ConnectedTime"].is_u64());
+    assert!(connection["UserName"].is_null());
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("srum.json");
+    let r = run(&[
+        "parse-srum",
+        "-f",
+        SRUM_WIN10,
+        "-t",
+        "json",
+        "-o",
+        file.to_str().unwrap(),
+        "-K",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stdout);
+    let documents = json_documents(&std::fs::read_to_string(&file).unwrap());
+    assert_eq!(documents.len(), 309);
+    assert_eq!(documents, entries);
+}
+
+#[test]
+fn srum_triage_directory_with_server_tables() {
+    let dir = tempfile::tempdir().unwrap();
+    let host1 = dir.path().join("HOST1/C/Windows/System32");
+    std::fs::create_dir_all(host1.join("sru")).unwrap();
+    std::fs::create_dir_all(host1.join("config")).unwrap();
+    std::fs::copy(repo(SRUM_WIN10), host1.join("sru/SRUDB.dat")).unwrap();
+    std::fs::write(host1.join("config/SOFTWARE"), software_hive()).unwrap();
+    let host2 = dir.path().join("HOST2/C/Windows/System32/SRU");
+    std::fs::create_dir_all(&host2).unwrap();
+    std::fs::copy(repo(SRUM_SERVER), host2.join("SRUDB.dat")).unwrap();
+    std::fs::write(dir.path().join("HOST3_SRUDB.dat"), b"not a database").unwrap();
+    let triage = dir.path().to_str().unwrap();
+
+    let out = tempfile::tempdir().unwrap();
+    let r = run(&[
+        "parse-srum",
+        "-d",
+        triage,
+        "-o",
+        out.path().to_str().unwrap(),
+        "-C",
+        "-K",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stdout);
+    for line in [
+        "SRUM databases parsed: 2 (could not parse: 1)",
+        "Entries: 476",
+        "  ProcessorTime: 2",
+        "  TotalUsed: 4",
+        "Account and Wi-Fi names: from the SOFTWARE hive (2 accounts, 2 Wi-Fi networks)",
+        "Databases without a SOFTWARE hive: 1",
+        "Could not parse",
+    ] {
+        assert!(r.stdout.contains(line), "{line}\n{}", r.stdout);
+    }
+    let server = out.path().join("HOST2_C_Windows_System32_SRU_SRUDB");
+    let mut files: Vec<String> = std::fs::read_dir(&server)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+        .collect();
+    files.sort();
+    assert_eq!(
+        files,
+        [
+            "AppResourceUseInfo.csv",
+            "NetworkBytes.csv",
+            "NetworkConnections.csv",
+            "ProcessorTime.csv",
+            "SizeInBytes.csv",
+            "SruDbIdMapTable.csv",
+            "TotalUsed.csv"
+        ]
+    );
+    let (_, used) = csv_rows(&server.join("TotalUsed.csv"));
+    assert_eq!(used.len(), 4);
+    assert!(used.iter().all(|r| r["AppType"] == "Object"));
+    let (_, network) = csv_rows(
+        &out.path()
+            .join("HOST1_C_Windows_System32_sru_SRUDB/NetworkUsages.csv"),
+    );
+    assert_eq!(network[0]["UserName"], "LocalService");
+
+    // one JSONL file per database
+    let jsonl = tempfile::tempdir().unwrap();
+    let r = run(&[
+        "parse-srum",
+        "-d",
+        triage,
+        "-t",
+        "jsonl",
+        "-o",
+        jsonl.path().to_str().unwrap(),
+        "-C",
+        "-K",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stdout);
+    let server = std::fs::read_to_string(
+        jsonl
+            .path()
+            .join("HOST2_C_Windows_System32_SRU_SRUDB.jsonl"),
+    )
+    .unwrap();
+    assert_eq!(server.lines().count(), 167);
+}
+
+#[test]
+fn srum_input_and_output_errors() {
+    let r = run(&["parse-srum", "-f", "test_files/srum/missing.dat", "-K"]);
+    assert_eq!(r.code, 1);
+    assert!(r.stdout.contains("The file does not exist"), "{}", r.stdout);
+
+    let r = run(&["parse-srum", "-f", "test_files/srum/README.md", "-K"]);
+    assert_eq!(r.code, 1);
+    assert!(r.stdout.contains("Could not parse"), "{}", r.stdout);
+
+    let r = run(&["parse-srum", "-d", "test_files/amcache", "-K"]);
+    assert_eq!(r.code, 1);
+    assert!(r.stdout.contains("No SRUM databases"), "{}", r.stdout);
+
+    let r = run(&["parse-srum", "-f", SRUM_WIN10, "-t", "csv"]);
+    assert_eq!(r.code, 1);
+    assert!(
+        r.stdout.contains("CSV output needs -o <DIR>"),
+        "{}",
+        r.stdout
+    );
+
+    let r = run(&["parse-srum", "-d", "test_files/srum", "-t", "jsonl"]);
+    assert_eq!(r.code, 1);
+    assert!(
+        r.stderr.contains("With -d, save the entries with -o"),
+        "{}",
+        r.stderr
+    );
+
+    // a SOFTWARE hive that can't be read: the entries are still written, without names
+    let dir = tempfile::tempdir().unwrap();
+    let hive = dir.path().join("SOFTWARE");
+    std::fs::write(&hive, b"regf but not a hive").unwrap();
+    let r = run(&[
+        "parse-srum",
+        "-f",
+        SRUM_WIN10,
+        "-r",
+        hive.to_str().unwrap(),
+        "-K",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stdout);
+    assert!(
+        r.stdout.contains("Could not read the SOFTWARE hive"),
+        "{}",
+        r.stdout
+    );
+    assert!(r.stdout.contains("Entries: 309"), "{}", r.stdout);
+}
