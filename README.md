@@ -120,7 +120,7 @@ Filtering:
 
 Output:
   -o, --output <PATH>                   Save every entry to a file (with -d: a directory with one file per $MFT)
-  -t, --output-type <TYPE>              Output type: csv (default, MFTECmd's columns), mft-dump-csv, json, jsonl. Without -o, the entries are written to stdout
+  -t, --output-type <TYPE>              Output type: csv (default, MFTECmd's columns), ys-mft-parser-csv, json, jsonl. Without -o, the entries are written to stdout
   -e, --extract-resident-streams <DIR>  Write the resident $DATA streams (the content of small files and alternate data streams) to files in DIR
   -C, --clobber                         Overwrite files when saving
 
@@ -169,12 +169,13 @@ juntei parse-mft -f '$MFT' -e resident-streams
   juntei's other output; MFTECmd writes `2007-06-30 12:50:52.2523952`. `ParseErrors` holds
   juntei's own descriptions of damaged records and of their extension records (MFTECmd leaves
   the extension records' out).
-- `-t mft-dump-csv` has `mft_dump`'s columns instead (one row per entry, ending with the
-  `$STANDARD_INFORMATION` and `$FILE_NAME` MFT-modified times). JSON / JSONL have every attribute
+- `-t ys-mft-parser-csv` has the columns of the `ys-mft-parser` command's CSV instead (upstream's
+  `mft_dump`; `-t mft-dump-csv` still works): one row per entry, ending with the
+  `$STANDARD_INFORMATION` and `$FILE_NAME` MFT-modified times. JSON / JSONL have every attribute
   of every entry and its `full_path`. Times keep the 100 ns precision of NTFS (7 decimal places).
 - With `-d`, files named `$MFT` (or ending in `$MFT`) are parsed; `-o` is a directory with one
   file per `$MFT`, named after its path (`HOST1/C/$MFT` → `HOST1_C__MFT.csv`).
-- In `mft_dump`'s CSV and in JSON, full paths use `\`, as Windows shows them, with the long names
+- In ys-mft-parser's CSV and in JSON, full paths use `\`, as Windows shows them, with the long names
   that extension records hold. A file whose parent directory's record was reused is `[Orphaned]` (unless the old directory left its
   name in an extension record); a deleted file in a deleted directory keeps its path; a parent that
   can't be read is `[Unknown]`.
@@ -185,7 +186,7 @@ juntei parse-mft -f '$MFT' -e resident-streams
   skipped, a parent-reference loop is cut (an `[Orphaned]` path), and unreadable entries are
   counted.
 
-$MFT parsing, `mft_dump`'s CSV and the JSON format come from Yamato Security's
+$MFT parsing, ys-mft-parser's CSV and the JSON format come from Yamato Security's
 [ys-mft-parser](https://github.com/Yamato-Security/ys-mft-parser), a maintained fork of Omer
 Ben-Amram's [mft](https://github.com/omerbenamram/mft) crate (MIT / Apache-2.0). On eight `$MFT`
 files (the mft crate's sample, the NIST hacking case and six from DFIRArtifactMuseum; 1,048,733

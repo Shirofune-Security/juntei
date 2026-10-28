@@ -1,5 +1,5 @@
 //! `parse-amcache`: Amcache.hve parsing with Yamato Security's ys-amcache-parser library (the
-//! parser and the text / JSON / JSONL / CSV writers of its `amcache4n6` command), with Hayabusa's
+//! parser and the text / JSON / JSONL / CSV writers of its `ys-amcache-parser` command), with Hayabusa's
 //! input options, progress bar and results summary around it.
 
 use crate::cli::{AmcacheOptions, OutputType};

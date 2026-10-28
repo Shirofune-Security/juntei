@@ -1,6 +1,6 @@
 //! `parse-mft`: $MFT parsing with Yamato Security's ys-mft-parser (a fork of Omer Ben-Amram's
 //! `mft` crate that does not crash on damaged or crafted records): the same CSV rows and JSON
-//! entries as its `mft_dump` command, with Hayabusa's input options, progress bar and results
+//! entries as its `ys-mft-parser` command, with Hayabusa's input options, progress bar and results
 //! summary around it.
 
 use crate::cli::{MftOptions, MftOutputType};
@@ -341,7 +341,7 @@ fn parse_one(
 enum EntryWriter {
     /// MFTECmd's columns, written after the entries are read (see [`crate::mftecmd`]).
     Csv(Box<csv::Writer<Box<dyn Write>>>),
-    MftDumpCsv(Box<csv::Writer<Box<dyn Write>>>),
+    YsMftParserCsv(Box<csv::Writer<Box<dyn Write>>>),
     Json(Box<dyn Write>),
     Jsonl(Box<dyn Write>),
 }
@@ -355,15 +355,15 @@ impl EntryWriter {
                     .map_err(io::Error::other)?;
                 EntryWriter::Csv(Box::new(csv))
             }
-            MftOutputType::MftDumpCsv => {
-                EntryWriter::MftDumpCsv(Box::new(csv::Writer::from_writer(w)))
+            MftOutputType::YsMftParserCsv => {
+                EntryWriter::YsMftParserCsv(Box::new(csv::Writer::from_writer(w)))
             }
             MftOutputType::Json => EntryWriter::Json(w),
             MftOutputType::Jsonl => EntryWriter::Jsonl(w),
         })
     }
 
-    /// mft_dump's formats: a CSV row per entry, or the entry and its full path as JSON (pretty,
+    /// ys-mft-parser's formats: a CSV row per entry, or the entry and its full path as JSON (pretty,
     /// newline-separated) or as one JSON line.
     fn write(
         &mut self,
@@ -373,7 +373,7 @@ impl EntryWriter {
     ) -> io::Result<()> {
         match self {
             EntryWriter::Csv(_) => Ok(()),
-            EntryWriter::MftDumpCsv(w) => w.serialize(row).map_err(io::Error::other),
+            EntryWriter::YsMftParserCsv(w) => w.serialize(row).map_err(io::Error::other),
             EntryWriter::Json(w) => {
                 serde_json::to_writer_pretty(&mut *w, &JsonEntry { full_path, entry })?;
                 w.write_all(b"\n")
@@ -387,13 +387,13 @@ impl EntryWriter {
 
     fn finish(self) -> io::Result<()> {
         match self {
-            EntryWriter::Csv(mut w) | EntryWriter::MftDumpCsv(mut w) => w.flush(),
+            EntryWriter::Csv(mut w) | EntryWriter::YsMftParserCsv(mut w) => w.flush(),
             EntryWriter::Json(mut w) | EntryWriter::Jsonl(mut w) => w.flush(),
         }
     }
 }
 
-/// One JSON entry as `mft_dump` writes it: the entry with its full path (`\` separators).
+/// One JSON entry as `ys-mft-parser` writes it: the entry with its full path (`\` separators).
 #[derive(Serialize)]
 struct JsonEntry<'a> {
     #[serde(serialize_with = "mft::serialize_option_windows_path")]
@@ -420,7 +420,7 @@ fn is_listed_by_its_base(
 }
 
 /// Write the resident $DATA streams of an entry and its extension records to `dir` with the names
-/// ys-mft-parser's `mft_dump` gives them:
+/// the `ys-mft-parser` command gives them:
 /// `<full path>__<entry>-<sequence>_<stream number>_<stream name>.dontrun`. Empty streams are
 /// skipped. The names come from the evidence, so every character that is not safe in a file name
 /// (separators, `:`, control characters, …) becomes `_`; the entry number keeps the names unique.

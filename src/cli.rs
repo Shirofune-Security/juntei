@@ -182,7 +182,7 @@ impl AmcacheOptions {
     }
 
     /// Which detailed records to include: the selectors, otherwise every record except for the
-    /// text report on the terminal (summary and findings only, like amcache4n6).
+    /// text report on the terminal (summary and findings only, like ys-amcache-parser).
     pub fn records(&self) -> (bool, bool) {
         if self.all || (!self.files && !self.devices && self.saves_records_by_default()) {
             (true, true)
@@ -206,8 +206,9 @@ impl AmcacheOptions {
 pub enum MftOutputType {
     /// One row per file name and per alternate data stream (the columns of MFTECmd)
     Csv,
-    /// One row per entry (the columns of mft_dump)
-    MftDumpCsv,
+    /// One row per entry (the columns of ys-mft-parser, upstream's mft_dump)
+    #[value(alias = "mft-dump-csv")]
+    YsMftParserCsv,
     /// One pretty-printed JSON object per entry
     Json,
     /// One JSON object per line
@@ -217,7 +218,7 @@ pub enum MftOutputType {
 impl MftOutputType {
     pub fn extension(&self) -> &'static str {
         match self {
-            MftOutputType::Csv | MftOutputType::MftDumpCsv => "csv",
+            MftOutputType::Csv | MftOutputType::YsMftParserCsv => "csv",
             MftOutputType::Json => "json",
             MftOutputType::Jsonl => "jsonl",
         }
@@ -282,7 +283,7 @@ pub struct MftOptions {
     #[arg(help_heading = Some("Output"), short = 'o', long, value_name = "PATH", display_order = 300)]
     pub output: Option<PathBuf>,
 
-    /// Output type: csv (default, MFTECmd's columns), mft-dump-csv, json, jsonl. Without -o, the entries are written to stdout
+    /// Output type: csv (default, MFTECmd's columns), ys-mft-parser-csv, json, jsonl. Without -o, the entries are written to stdout
     #[arg(help_heading = Some("Output"), short = 't', long = "output-type", value_name = "TYPE", value_enum, hide_possible_values = true, display_order = 301)]
     pub output_type: Option<MftOutputType>,
 

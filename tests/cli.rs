@@ -1,6 +1,6 @@
 //! End-to-end tests: run the built binary against the test hives in `test_files/amcache/`.
 //!
-//! The expected counts are those of ys-amcache-parser's `amcache4n6`, which was cross-validated
+//! The expected counts are those of the `ys-amcache-parser` command, which was cross-validated
 //! against Eric Zimmerman's AmcacheParser and regipy (see `test_files/amcache/README.md`).
 
 use serde_json::Value;
@@ -434,24 +434,29 @@ fn mft_csv_json_and_jsonl() {
     assert_eq!(ads["FileSize"], "1261821952");
     assert_eq!(row("8", "$BadClus")["HasAds"], "True");
 
-    // mft_dump's columns: one row per entry
-    let r = run(&[
-        "parse-mft",
-        "-f",
-        MFT,
-        "-o",
-        csv_path.to_str().unwrap(),
-        "-t",
-        "mft-dump-csv",
-        "-C",
-        "-K",
-    ]);
-    assert_eq!(r.code, 0, "{}", r.stderr);
-    let text = std::fs::read_to_string(&csv_path).unwrap();
+    // ys-mft-parser's columns: one row per entry (`mft-dump-csv`, upstream's name, still works)
+    let mut texts = Vec::new();
+    for output_type in ["ys-mft-parser-csv", "mft-dump-csv"] {
+        let r = run(&[
+            "parse-mft",
+            "-f",
+            MFT,
+            "-o",
+            csv_path.to_str().unwrap(),
+            "-t",
+            output_type,
+            "-C",
+            "-K",
+        ]);
+        assert_eq!(r.code, 0, "{output_type}: {}", r.stderr);
+        texts.push(std::fs::read_to_string(&csv_path).unwrap());
+    }
+    assert_eq!(texts[0], texts[1]);
+    let text = &texts[0];
     assert!(text.starts_with(
         "Signature,EntryId,Sequence,BaseEntryId,BaseEntrySequence,HardLinkCount,Flags,"
     ));
-    let paths = full_paths(&text);
+    let paths = full_paths(text);
     assert_eq!(paths.len(), 1016);
     for (id, path) in [
         ("0", "$MFT"),
