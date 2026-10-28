@@ -10,6 +10,7 @@ mod mft;
 mod mftecmd;
 mod prefetch;
 mod progress;
+mod shimcache;
 mod srum;
 mod usn_journal;
 mod util;
@@ -108,6 +109,17 @@ fn main() {
                 display_logo(opts.common.quiet, opts.common.no_color, true, false);
             }
             let code = jump_lists::run(opts);
+            if !data_only {
+                print_elapsed(start, opts.common.no_color);
+            }
+            code
+        }
+        Commands::ParseShimcache(opts) => {
+            let data_only = opts.data_on_stdout();
+            if !data_only {
+                display_logo(opts.common.quiet, opts.common.no_color, true, false);
+            }
+            let code = shimcache::run(opts);
             if !data_only {
                 print_elapsed(start, opts.common.no_color);
             }
