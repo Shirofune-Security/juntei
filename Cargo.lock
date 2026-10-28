@@ -903,12 +903,12 @@ dependencies = [
 [[package]]
 name = "shimcache-core"
 version = "0.2.0"
-source = "git+https://github.com/Yamato-Security/ys-shimcache-parser?rev=fc7e8e8837f7ca4481cf4fa1e21cea51d3e17914#fc7e8e8837f7ca4481cf4fa1e21cea51d3e17914"
+source = "git+https://github.com/Yamato-Security/ys-shimcache-parser?rev=10c6ff14a8be8cafcf45f9cd8b5c111fa8b1a4c5#10c6ff14a8be8cafcf45f9cd8b5c111fa8b1a4c5"
 
 [[package]]
 name = "shimcache-forensic"
 version = "0.2.0"
-source = "git+https://github.com/Yamato-Security/ys-shimcache-parser?rev=fc7e8e8837f7ca4481cf4fa1e21cea51d3e17914#fc7e8e8837f7ca4481cf4fa1e21cea51d3e17914"
+source = "git+https://github.com/Yamato-Security/ys-shimcache-parser?rev=10c6ff14a8be8cafcf45f9cd8b5c111fa8b1a4c5#10c6ff14a8be8cafcf45f9cd8b5c111fa8b1a4c5"
 dependencies = [
  "forensicnomicon",
  "shimcache-core",

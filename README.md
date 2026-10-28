@@ -561,7 +561,8 @@ juntei parse-shimcache -f SYSTEM -t jsonl | jq .
   `Duplicate`.
 - A dirty hive (one Windows had not finished writing) is read with its transaction logs
   (`SYSTEM.LOG1`, `SYSTEM.LOG2` next to it) applied, as Windows applies them when it loads the
-  hive; without them, entries may be missing, and the summary says so. Entries left in the slack
+  hive, even when its base block is damaged (the logs give it one); without usable logs, entries
+  may be missing, and the summary says so. Entries left in the slack
   of the cache's value (dropped from the cache, Windows 8 to 11) are recovered (`FromSlack`).
 - CSV has Eric Zimmerman's AppCompatCacheParser's columns (`ControlSet` … `FromSlack`), with its
   `Executed` (`Yes`, `No`, or `NA` where the format has no flag: Windows XP and 32-bit Vista), and

@@ -2531,7 +2531,7 @@ fn shimcache_summary_on_the_terminal() {
     ] {
         assert!(r.stdout.contains(line), "{line}\n{}", r.stdout);
     }
-    assert!(!r.stdout.contains("without their logs"), "{}", r.stdout);
+    assert!(!r.stdout.contains("were not applied"), "{}", r.stdout);
 
     // the hive as it is: dirty, its logs not applied (they don't change this cache)
     let r = run(&[
@@ -2544,8 +2544,51 @@ fn shimcache_summary_on_the_terminal() {
     assert_eq!(r.code, 0, "{}", r.stderr);
     for line in [
         "Dirty hives recovered with their transaction logs: 0",
-        "Dirty hives read without their logs (entries may be missing): 1",
+        "Dirty hives whose transaction logs were not applied (entries may be missing): 1",
         "Entries: 359 (executed 30",
+    ] {
+        assert!(r.stdout.contains(line), "{line}\n{}", r.stdout);
+    }
+}
+
+/// Changes one byte of a file in place.
+fn flip_byte(path: &Path, at: usize) {
+    let mut bytes = std::fs::read(path).unwrap();
+    bytes[at] ^= 0xFF;
+    std::fs::write(path, bytes).unwrap();
+}
+
+#[test]
+fn shimcache_hive_with_a_damaged_base_block_is_recovered_from_its_logs() {
+    let hive = system_hive();
+    let config = hive.path().join("HOST/C/Windows/System32/config");
+    // no `regf` signature: the base block comes from the log with the latest entries
+    flip_byte(&config.join("SYSTEM"), 0);
+    let r = run(&["parse-shimcache", "-d", hive.path().to_str().unwrap(), "-K"]);
+    assert_eq!(r.code, 0, "{}", r.stdout);
+    for line in [
+        "SYSTEM hives parsed: 1",
+        "Dirty hives recovered with their transaction logs: 1",
+        "Entries: 359 (executed 30, not executed 329, no execution flag 0)",
+    ] {
+        assert!(r.stdout.contains(line), "{line}\n{}", r.stdout);
+    }
+}
+
+#[test]
+fn shimcache_logs_whose_entries_are_damaged_are_not_applied() {
+    let hive = system_hive();
+    let config = hive.path().join("HOST/C/Windows/System32/config");
+    // a byte of each log's first entry: its hashes no longer match, so nothing can be applied
+    for log in ["SYSTEM.LOG1", "SYSTEM.LOG2"] {
+        flip_byte(&config.join(log), 512 + 100);
+    }
+    let r = run(&["parse-shimcache", "-d", hive.path().to_str().unwrap(), "-K"]);
+    assert_eq!(r.code, 0, "{}", r.stdout);
+    for line in [
+        "Dirty hives recovered with their transaction logs: 0",
+        "Dirty hives whose transaction logs were not applied (entries may be missing): 1",
+        "Entries: 359",
     ] {
         assert!(r.stdout.contains(line), "{line}\n{}", r.stdout);
     }

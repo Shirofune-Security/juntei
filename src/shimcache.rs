@@ -194,18 +194,28 @@ fn parse_file(path: &Path, no_logs: bool) -> Result<Parsed, String> {
     }
     let data = std::fs::read(path).map_err(|e| e.to_string())?;
     let source = path.to_string_lossy().to_string();
-    if data.starts_with(b"regf") {
-        let logs = if no_logs { Vec::new() } else { find_logs(path) };
-        let caches = read_system(data, &logs).map_err(|e| e.to_string())?;
-        return Ok(Parsed {
-            source,
-            is_value: false,
-            caches,
-        });
+    let logs = if no_logs { Vec::new() } else { find_logs(path) };
+    // A hive, or one whose base block is damaged (no `regf`) but has transaction logs: they
+    // give it a base block. Otherwise, an AppCompatCache value on its own.
+    let mut hive_error = None;
+    if data.starts_with(b"regf") || !logs.is_empty() {
+        match read_system(data.clone(), &logs) {
+            Ok(caches) => {
+                return Ok(Parsed {
+                    source,
+                    is_value: false,
+                    caches,
+                });
+            }
+            Err(e) if data.starts_with(b"regf") => return Err(e.to_string()),
+            Err(e) => hive_error = Some(e.to_string()),
+        }
     }
-    // not a hive: the AppCompatCache value's bytes (exported from the registry, or carved)
-    let cache = decode(&data, None)
-        .map_err(|e| format!("neither a registry hive nor an AppCompatCache value ({e})"))?;
+    // the AppCompatCache value's bytes (exported from the registry, or carved)
+    let cache = decode(&data, None).map_err(|e| match &hive_error {
+        Some(h) => format!("neither a registry hive ({h}) nor an AppCompatCache value ({e})"),
+        None => format!("neither a registry hive nor an AppCompatCache value ({e})"),
+    })?;
     Ok(Parsed {
         source,
         is_value: true,
@@ -484,7 +494,7 @@ fn print_summary(parsed: &[Parsed], failed: usize, no_color: bool) {
     if !dirty.is_empty() {
         p_label(
             no_color,
-            "Dirty hives read without their logs (entries may be missing): ",
+            "Dirty hives whose transaction logs were not applied (entries may be missing): ",
             &fmt_num(dirty.len()),
         );
         for f in dirty.iter().take(MAX_PRINTED_FINDINGS) {
