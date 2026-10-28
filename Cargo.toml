@@ -39,7 +39,7 @@ shell = { package = "sootmark-shell", git = "https://github.com/Yamato-Security/
 # Jump list parsing: Yamato Security's ys-jump-lists-parser (from sootmark-shell's jump list and
 # compound file code, MIT OR Apache-2.0), pinned to a commit; it reads links with the same
 # ys-lnk-parser commit as above.
-jumplist = { package = "ys-jump-lists", git = "https://github.com/Yamato-Security/ys-jump-lists-parser", rev = "bd40d5089740a8e8a01057d64e3ce2624d388508", features = ["codepages"] }
+jumplist = { package = "ys-jump-lists", git = "https://github.com/Yamato-Security/ys-jump-lists-parser", rev = "c56a8d856df5ae1bb0aabe5d54cd58da3159e644", features = ["codepages"] }
 # The order of parse-srum's JSON columns, and parse-mft's JSON entries (as mft_dump writes them).
 serde = { version = "1", features = ["derive"] }
 # SRUM parsing: Yamato Security's ys-srum-parser, a fork of Sootmark's ese and srum crates
