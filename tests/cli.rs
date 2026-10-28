@@ -1614,3 +1614,214 @@ fn srum_input_and_output_errors() {
     );
     assert!(r.stdout.contains("Entries: 309"), "{}", r.stdout);
 }
+
+// --- parse-lnk ---------------------------------------------------------------------------------
+
+const LNK_DIR: &str = "test_files/lnk";
+
+#[test]
+fn lnk_summary_on_the_terminal() {
+    let r = run(&["parse-lnk", "-d", LNK_DIR, "-K"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    // found under -d, so with the platform's separator
+    let found = |name: &str| format!("  {} -> ", Path::new(LNK_DIR).join(name).display());
+    for line in [
+        "Shortcuts parsed: 6".to_owned(),
+        "Targets: fixed drives 2, removable drives 1, CD/DVD 0, network shares 1".to_owned(),
+        "Machines that made them: 1 (sagerez)".to_owned(),
+        "With problems: 1".to_owned(),
+        "Hidden command line (string data over 260 characters): 1".to_owned(),
+        found("padded_cli_arguments.lnk") + r#"This PC\C:\Windows\System32\cmd.exe /c "set PATH="#,
+        "Data after the end of the link: 1".to_owned(),
+        found("appended_data.lnk") + r"This PC\All Control Panel Items\" + "\n",
+        "Shell or script host started with arguments: 2".to_owned(),
+        found("msbuild_prompt.lnk") + r"C:\Windows\System32\cmd.exe /k",
+        "To save every record, add -o <FILE>".to_owned(),
+    ] {
+        assert!(r.stdout.contains(&line), "{line}\n{}", r.stdout);
+    }
+}
+
+#[test]
+fn lnk_csv_has_lecmds_columns() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("lnk.csv");
+    let r = run(&[
+        "parse-lnk",
+        "-d",
+        LNK_DIR,
+        "-o",
+        out.to_str().unwrap(),
+        "-K",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stdout);
+    let (header, rows) = csv_rows(&out);
+    assert_eq!(
+        &header[..5],
+        [
+            "SourceFile",
+            "SourceCreated",
+            "SourceModified",
+            "SourceAccessed",
+            "TargetCreated"
+        ]
+    );
+    assert_eq!(header.len(), 46);
+    assert_eq!(rows.len(), 6);
+    let row = |name: &str| {
+        rows.iter()
+            .find(|r| r["SourceFile"].ends_with(name))
+            .unwrap()
+    };
+    // Directory Opus's help, from Eric Zimmerman's test set: as LECmd reads it
+    let opus = row("opus_help.lnk");
+    for (column, value) in [
+        ("TargetCreated", "2015-12-25T02:42:20.167694100Z"),
+        ("TargetModified", "2015-12-17T17:36:56Z"),
+        ("FileSize", "8705626"),
+        (
+            "LocalPath",
+            r"C:\Program Files\GPSoftware\Directory Opus\Help\dopus.chm",
+        ),
+        (
+            "TargetIDAbsolutePath",
+            r"This PC\C:\Program Files\GPSoftware\Directory Opus\Help\dopus.chm",
+        ),
+        ("TargetMFTEntryNumber", "108088"),
+        ("TargetMFTSequenceNumber", "1"),
+        ("MachineID", "sagerez"),
+        ("MachineMACAddress", "a4:34:d9:43:f3:63"),
+        ("TrackerCreatedOn", "2015-12-25T02:28:38.498589100Z"),
+        ("VolumeSerialNumber", "6A228FAA"),
+        ("DriveType", "DRIVE_FIXED"),
+        ("FileAttributes", "ARCHIVE"),
+        (
+            "ExtraBlocksPresent",
+            "IconEnvironmentDataBlock|TrackerDataBlock|PropertyStoreDataBlock",
+        ),
+        ("ShowWindow", "SW_SHOWNORMAL"),
+        ("VolumeDroid", "38648bd4-606f-459b-91e5-d8883d4b70b1"),
+        ("FileDroid", "34b5a323-aaaf-11e5-b29b-a434d943f363"),
+        ("Problems", ""),
+        ("AppendedBytes", "0"),
+    ] {
+        assert_eq!(opus[column], value, "{column}");
+    }
+    assert!(opus["HeaderFlags"].starts_with("HasLinkTargetIDList|HasLinkInfo|"));
+    assert_eq!(
+        row("network_share_unicode.lnk")["NetworkPath"],
+        r"\\127.0.0.1\TEST"
+    );
+    assert_eq!(row("removable_drive.lnk")["DriveType"], "DRIVE_REMOVABLE");
+    assert_eq!(row("appended_data.lnk")["AppendedBytes"], "67649");
+    let padded = row("padded_cli_arguments.lnk");
+    assert_eq!(padded["Arguments"].chars().count(), 1431);
+    assert!(padded["Problems"].starts_with("string data longer than 260 characters"));
+}
+
+#[test]
+fn lnk_json_and_jsonl() {
+    let r = run(&[
+        "parse-lnk",
+        "-f",
+        "test_files/lnk/opus_help.lnk",
+        "-t",
+        "jsonl",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(!r.stdout.contains("Results Summary"));
+    let v: Value = serde_json::from_str(r.stdout.trim()).unwrap();
+    assert_eq!(v["tracker"]["machine_id"], "sagerez");
+    assert_eq!(
+        v["tracker"]["volume_droid_birth"],
+        "38648bd4-606f-459b-91e5-d8883d4b70b1"
+    );
+    assert_eq!(v["target_mft_entry"], 108_088);
+    assert_eq!(v["header"]["show_command"], "SW_SHOWNORMAL");
+    let items = v["target_items"].as_array().unwrap();
+    assert_eq!(items[0]["name"], "This PC");
+    assert_eq!(items.last().unwrap()["name"], "dopus.chm");
+    assert_eq!(v["extra_blocks"][0], "IconEnvironmentDataBlock");
+    assert!(
+        v["icon_environment"]
+            .as_str()
+            .unwrap()
+            .starts_with("%SystemDrive%")
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("lnk.json");
+    let r = run(&[
+        "parse-lnk",
+        "-d",
+        LNK_DIR,
+        "-t",
+        "json",
+        "-o",
+        out.to_str().unwrap(),
+        "-K",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stdout);
+    let docs = json_documents(&std::fs::read_to_string(&out).unwrap());
+    assert_eq!(docs.len(), 6);
+    let padded = docs
+        .iter()
+        .find(|d| {
+            d["source_file"]
+                .as_str()
+                .unwrap()
+                .ends_with("padded_cli_arguments.lnk")
+        })
+        .unwrap();
+    assert_eq!(padded["problems"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn lnk_input_and_output_errors() {
+    let r = run(&["parse-lnk", "-f", "test_files/lnk/missing.lnk", "-K"]);
+    assert_eq!(r.code, 1);
+    assert!(r.stdout.contains("The file does not exist"), "{}", r.stdout);
+
+    let r = run(&[
+        "parse-lnk",
+        "-f",
+        "test_files/lnk/../amcache/README.md",
+        "-K",
+    ]);
+    assert_eq!(r.code, 1);
+    assert!(r.stdout.contains("Could not parse"), "{}", r.stdout);
+    assert!(r.stdout.contains("not a shell link"), "{}", r.stdout);
+
+    let r = run(&["parse-lnk", "-d", "test_files/amcache", "-K"]);
+    assert_eq!(r.code, 1);
+    assert!(r.stdout.contains("No shortcuts (*.lnk)"), "{}", r.stdout);
+
+    let r = run(&[
+        "parse-lnk",
+        "-f",
+        "test_files/lnk/opus_help.lnk",
+        "--code-page",
+        "12345",
+        "-K",
+    ]);
+    assert_eq!(r.code, 1);
+    assert!(
+        r.stdout.contains("Code page 12345 is not supported"),
+        "{}",
+        r.stdout
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("x.csv");
+    std::fs::write(&out, b"keep").unwrap();
+    let r = run(&[
+        "parse-lnk",
+        "-f",
+        "test_files/lnk/opus_help.lnk",
+        "-o",
+        out.to_str().unwrap(),
+        "-K",
+    ]);
+    assert_eq!(r.code, 1);
+    assert!(r.stdout.contains("already exists"), "{}", r.stdout);
+}
