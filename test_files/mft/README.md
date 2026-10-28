@@ -13,6 +13,6 @@ Entries whose parent directory lies beyond the cut have an `[Unknown]` path.
 | Paths | entry 0 `$MFT`, 5 `.`, 30 `WINDOWS/system32/config` |
 
 The CSV, JSON and JSONL output of `parse-mft` and its extracted streams are byte-identical to
-`mft_dump` of [ys-mft-parser](https://github.com/Yamato-Security/ys-mft-parser) on this file and on
+the `ys-mft-parser` command of [ys-mft-parser](https://github.com/Yamato-Security/ys-mft-parser) on this file and on
 the full 13 MB sample. Damaged inputs (a parent-reference cycle, an all-zero first record) are
 crafted from this file by the tests.
