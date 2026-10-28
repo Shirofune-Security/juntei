@@ -343,7 +343,7 @@ fn input_and_output_errors() {
 
 const MFT: &str = "test_files/mft/MFT";
 
-/// (EntryId, FullPath) of every CSV row (paths use `/` on every OS).
+/// (EntryId, FullPath) of every CSV row (paths use `\` on every OS, as Windows shows them).
 fn full_paths(csv_text: &str) -> Vec<(String, String)> {
     let mut rdr = csv::Reader::from_reader(csv_text.as_bytes());
     let headers = rdr.headers().unwrap().clone();
@@ -393,7 +393,11 @@ fn mft_csv_json_and_jsonl() {
     ));
     let paths = full_paths(&text);
     assert_eq!(paths.len(), 1016);
-    for (id, path) in [("0", "$MFT"), ("5", "."), ("30", "WINDOWS/system32/config")] {
+    for (id, path) in [
+        ("0", "$MFT"),
+        ("5", "."),
+        ("30", r"WINDOWS\system32\config"),
+    ] {
         assert!(
             paths.contains(&(id.to_string(), path.to_string())),
             "{id} {path}"
@@ -415,7 +419,13 @@ fn mft_csv_json_and_jsonl() {
     let docs = json_documents(&std::fs::read_to_string(&json_path).unwrap());
     assert_eq!(docs.len(), 1016);
     assert_eq!(docs[0]["header"]["record_number"], 0);
+    assert_eq!(docs[0]["full_path"], "$MFT");
     assert!(docs[0]["attributes"].as_array().unwrap().len() > 2);
+    let config = docs
+        .iter()
+        .find(|d| d["header"]["record_number"] == 30)
+        .unwrap();
+    assert_eq!(config["full_path"], r"WINDOWS\system32\config");
 
     // -t without -o: only the entries on stdout
     let r = run(&["parse-mft", "-f", MFT, "-t", "jsonl", "-r", "0-5,30"]);
@@ -461,7 +471,8 @@ fn mft_resident_streams_and_directory_mode() {
     );
     assert!(r.stdout.contains("(2 files)"));
     assert!(
-        r.stdout.contains("Resident streams extracted: 48"),
+        // 24 resident streams in each, of which 2 are empty and not written
+        r.stdout.contains("Resident streams extracted: 44"),
         "{}",
         r.stdout
     );
@@ -470,7 +481,7 @@ fn mft_resident_streams_and_directory_mode() {
         assert_eq!(full_paths(&text).len(), 1016, "{name}");
         assert_eq!(
             std::fs::read_dir(streams.join(name)).unwrap().count(),
-            24,
+            22,
             "{name}"
         );
     }
