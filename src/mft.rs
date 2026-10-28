@@ -69,6 +69,13 @@ pub fn run(opts: &MftOptions) -> i32 {
         );
         return 1;
     }
+    if opts.has_csv_options() && opts.output_type() != MftOutputType::Csv {
+        report_error(
+            None,
+            "--all-times, --short-names and --cutoff are options of the CSV output (-t csv).",
+        );
+        return 1;
+    }
     if let Some(out) = &opts.output
         && let Err(msg) = check_output(out, root.is_some(), opts.clobber)
     {
@@ -82,13 +89,24 @@ pub fn run(opts: &MftOptions) -> i32 {
         return 1;
     }
 
-    // Check every header first: the progress bar counts entries.
+    // Check every header first: the progress bar counts entries. The CSV (MFTECmd's columns)
+    // reads every entry twice more: once for the directories, once for the rows.
+    let csv_passes =
+        if opts.output_type() == MftOutputType::Csv && (opts.output.is_some() || data_on_stdout) {
+            2
+        } else {
+            0
+        };
     let mut inputs: Vec<(PathBuf, Result<u64, String>)> = Vec::new();
     for path in &mfts {
         let count = MftParser::from_path(path)
-            .map(|parser| match &opts.ranges {
-                Some(r) => r.len(),
-                None => parser.get_entry_count(),
+            .map(|parser| {
+                let entries = parser.get_entry_count();
+                let listed = match &opts.ranges {
+                    Some(r) => r.len(),
+                    None => entries,
+                };
+                listed.saturating_add(entries.saturating_mul(csv_passes))
             })
             .map_err(|e| e.to_string());
         inputs.push((path.clone(), count));
@@ -162,7 +180,13 @@ pub fn run(opts: &MftOptions) -> i32 {
             (None, true) => Some(Box::new(BufWriter::new(io::stdout()))),
             (None, false) => None,
         };
-        let mut writer = sink.map(|w| EntryWriter::new(w, output_type));
+        let mut writer = match sink.map(|w| EntryWriter::new(w, output_type)).transpose() {
+            Ok(w) => w,
+            Err(e) => {
+                report_error(bar.as_ref(), &format!("Could not write the header: {e}"));
+                return 1;
+            }
+        };
         let parsed = parse_one(
             path,
             opts,
@@ -291,6 +315,16 @@ fn parse_one(
             w.write(&entry, full_path, &row)?;
         }
     }
+    if let Some(EntryWriter::Csv(w)) = writer {
+        stats.csv_rows += crate::mftecmd::write(
+            &mut parser,
+            &path.to_string_lossy(),
+            opts.mftecmd(),
+            opts.ranges.as_ref(),
+            w,
+            bar,
+        )?;
+    }
     if printed < stats.unreadable && stats.unreadable > MAX_PRINTED_ERRORS {
         report_error(
             bar,
@@ -305,18 +339,28 @@ fn parse_one(
 
 /// The CSV / JSON / JSONL writer of one output.
 enum EntryWriter {
+    /// MFTECmd's columns, written after the entries are read (see [`crate::mftecmd`]).
     Csv(Box<csv::Writer<Box<dyn Write>>>),
+    MftDumpCsv(Box<csv::Writer<Box<dyn Write>>>),
     Json(Box<dyn Write>),
     Jsonl(Box<dyn Write>),
 }
 
 impl EntryWriter {
-    fn new(w: Box<dyn Write>, output_type: MftOutputType) -> Self {
-        match output_type {
-            MftOutputType::Csv => EntryWriter::Csv(Box::new(csv::Writer::from_writer(w))),
+    fn new(w: Box<dyn Write>, output_type: MftOutputType) -> io::Result<Self> {
+        Ok(match output_type {
+            MftOutputType::Csv => {
+                let mut csv = csv::Writer::from_writer(w);
+                csv.write_record(crate::mftecmd::CSV_HEADER)
+                    .map_err(io::Error::other)?;
+                EntryWriter::Csv(Box::new(csv))
+            }
+            MftOutputType::MftDumpCsv => {
+                EntryWriter::MftDumpCsv(Box::new(csv::Writer::from_writer(w)))
+            }
             MftOutputType::Json => EntryWriter::Json(w),
             MftOutputType::Jsonl => EntryWriter::Jsonl(w),
-        }
+        })
     }
 
     /// mft_dump's formats: a CSV row per entry, or the entry and its full path as JSON (pretty,
@@ -328,7 +372,8 @@ impl EntryWriter {
         row: &FlatMftEntryWithName,
     ) -> io::Result<()> {
         match self {
-            EntryWriter::Csv(w) => w.serialize(row).map_err(io::Error::other),
+            EntryWriter::Csv(_) => Ok(()),
+            EntryWriter::MftDumpCsv(w) => w.serialize(row).map_err(io::Error::other),
             EntryWriter::Json(w) => {
                 serde_json::to_writer_pretty(&mut *w, &JsonEntry { full_path, entry })?;
                 w.write_all(b"\n")
@@ -342,7 +387,7 @@ impl EntryWriter {
 
     fn finish(self) -> io::Result<()> {
         match self {
-            EntryWriter::Csv(mut w) => w.flush(),
+            EntryWriter::Csv(mut w) | EntryWriter::MftDumpCsv(mut w) => w.flush(),
             EntryWriter::Json(mut w) | EntryWriter::Jsonl(mut w) => w.flush(),
         }
     }
@@ -429,6 +474,8 @@ fn safe_file_name(s: &str, max: usize) -> String {
 /// Counts for the results summary.
 #[derive(Default)]
 struct Stats {
+    /// Rows of the CSV (MFTECmd's columns): one per file name and per alternate data stream.
+    csv_rows: u64,
     files_parsed: usize,
     files_failed: usize,
     entries: usize,
@@ -509,6 +556,13 @@ fn print_summary(s: &Stats, no_color: bool) {
         ),
     );
     p_label(no_color, "Empty entries (skipped): ", &fmt_num(s.empty));
+    if s.csv_rows > 0 {
+        p_label(
+            no_color,
+            "CSV rows (file names and alternate data streams): ",
+            &fmt_num(usize::try_from(s.csv_rows).unwrap_or(usize::MAX)),
+        );
+    }
     p(None, "", true);
 }
 

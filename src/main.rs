@@ -6,6 +6,7 @@ mod color;
 mod hive;
 mod lnk;
 mod mft;
+mod mftecmd;
 mod prefetch;
 mod progress;
 mod srum;
