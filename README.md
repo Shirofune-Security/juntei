@@ -13,6 +13,7 @@ not event logs.
 | Prefetch (`*.pf`) | `parse-prefetch` | Supported |
 | USN journal (`$UsnJrnl:$J`) | `parse-usn-journal` | Supported |
 | SRUM (`SRUDB.dat`) | `parse-srum` | Supported |
+| Shortcuts (`*.lnk`) | `parse-lnk` | Supported |
 | More Windows artifacts | | Planned |
 
 ## Build
@@ -350,6 +351,71 @@ SRUM parsing comes from Yamato Security's
 [ese](https://github.com/Sootmark/ese) and [srum](https://github.com/Sootmark/srum) crates (MIT OR
 Apache-2.0). On eleven real databases, every column of all 45,255 entries `parse-srum` writes
 equals a decoding written independently from dissect.esedb's values.
+
+### `parse-lnk`
+
+Parses Windows shortcuts (`*.lnk`, MS-SHLLINK): what a link starts and with which arguments, the
+target's times, size, attributes and MFT reference when the link was made, the volume (drive type,
+serial number, label) or network share it was on, and the machine that made it (NetBIOS name, MAC
+address and time from the distributed link tracking IDs). Shortcuts in `Recent`, on the desktop and
+in the Start menu show files and programs that were opened, from drives that may be gone; shortcuts
+in e-mail attachments and archives are a common way to start malware.
+
+```
+Input:
+  -d, --directory <DIR>  Directory to search recursively for shortcuts (*.lnk)
+  -f, --file <FILE>      File path to one shortcut
+      --code-page <CP>   Code page of text that isn't Unicode: the system's ANSI code page (932 for Japanese) [default: 1252]
+
+Output:
+  -o, --output <FILE>       Save every record to a file
+  -t, --output-type <TYPE>  Output type: csv (default), json, jsonl. Without -o, the records are written to stdout
+  -C, --clobber             Overwrite files when saving
+
+Display Settings:
+  -K, --no-color  Disable color output
+  -q, --quiet     Quiet mode: do not display the launch banner
+```
+
+```
+# Targets, machines, time range and findings on the terminal
+juntei parse-lnk -d C/Users/alice/AppData/Roaming/Microsoft/Windows/Recent
+
+# One CSV row per shortcut, with LECmd's columns
+juntei parse-lnk -d triage/ -o lnk.csv
+
+# Shortcuts made on a Japanese system (ANSI text in code page 932)
+juntei parse-lnk -d triage/ --code-page 932 -o lnk.csv
+
+# Every field (target items, extra data blocks, property stores, console settings) as JSON Lines
+juntei parse-lnk -f invoice.pdf.lnk -t jsonl | jq .
+```
+
+- CSV has Eric Zimmerman's LECmd columns (`SourceFile` … `FileDroidBirth`, with `Anomalies` named
+  `Problems`) and then `IconIndex`, `HotKey`, `IconEnvironment`, `KnownFolder`, `SpecialFolder`,
+  `DarwinId`, `ShimLayer`, `NetworkDevice`, `NetworkProvider`, `ConsoleCodePage` and
+  `AppendedBytes`. Times are UTC (RFC 3339) and the source file's own times come from the file
+  system. JSON / JSONL have one object per shortcut with every field: each target item (its type,
+  name, MFT reference and times), the extra data blocks, the property stores (with property names)
+  and the console settings.
+- Findings on the terminal: a name, relative path or working directory that claims more than 260
+  characters (Windows reads only 260, so the arguments Windows runs hide inside it from tools that
+  trust the count; they're read as Windows reads them), data after the end of the link, and shells
+  or script hosts (`cmd.exe`, `powershell.exe`, `mshta.exe`, `wscript.exe`, `rundll32.exe`, …)
+  started with arguments.
+- Text that isn't Unicode (old links, and some fields of new ones) is in the ANSI code page of the
+  system that made the link: Windows-1252 unless `--code-page` says otherwise.
+- Damaged links are parsed as far as they go and their problems reported (`Problems`); a file that
+  isn't a link is reported and skipped.
+
+LNK parsing comes from Yamato Security's
+[ys-lnk-parser](https://github.com/Yamato-Security/ys-lnk-parser), a maintained fork of Sootmark's
+[shell](https://github.com/Sootmark/shell) crate (MIT OR Apache-2.0) with features and fixes from
+other LNK parsers. On 1,118 links from public test sets, the 30 columns `parse-lnk` shares with
+LECmd have LECmd's values except 16: 13 target paths (LECmd shows a damaged item or cuts a name in
+4 and a placeholder in 6, and names an MTP device or Control Panel applet that `parse-lnk` doesn't
+in 3), 2 lists of extra data blocks (blocks with unknown signatures or cut off, which LECmd calls
+`DamagedDataBlock`) and 1 MFT reference LECmd reads from the wrong bytes.
 
 ## License
 
