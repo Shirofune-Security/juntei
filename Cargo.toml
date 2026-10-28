@@ -32,7 +32,7 @@ serde_json = "1"
 # USN journal parsing: Yamato Security's ys-usn-journal-parser, a fork of sootmark-usn
 # (MIT OR Apache-2.0), pinned to a commit; its `mft` feature seeds paths from the $MFT with the
 # same ys-mft-parser commit as above.
-usn = { package = "sootmark-usn", git = "https://github.com/Yamato-Security/ys-usn-journal-parser", rev = "0df62e3c87a10a3cfaa001417d280ee731c098c5", features = ["mft"] }
+usn = { package = "sootmark-usn", git = "https://github.com/Yamato-Security/ys-usn-journal-parser", rev = "4630df5acbca0e2476b595f7c38c93e082bead9e", features = ["mft"] }
 # LNK parsing: Yamato Security's ys-lnk-parser, a fork of sootmark-shell (MIT OR Apache-2.0),
 # pinned to a commit, with its code pages for links from non-Western systems.
 shell = { package = "sootmark-shell", git = "https://github.com/Yamato-Security/ys-lnk-parser", rev = "cc27ef31eb7a9ffeec46914f1b23d836eb0c6357", features = ["codepages"] }

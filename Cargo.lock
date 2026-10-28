@@ -913,7 +913,7 @@ dependencies = [
 [[package]]
 name = "sootmark-usn"
 version = "0.2.0"
-source = "git+https://github.com/Yamato-Security/ys-usn-journal-parser?rev=0df62e3c87a10a3cfaa001417d280ee731c098c5#0df62e3c87a10a3cfaa001417d280ee731c098c5"
+source = "git+https://github.com/Yamato-Security/ys-usn-journal-parser?rev=4630df5acbca0e2476b595f7c38c93e082bead9e#4630df5acbca0e2476b595f7c38c93e082bead9e"
 dependencies = [
  "mft",
 ]
