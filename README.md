@@ -144,15 +144,21 @@ juntei parse-mft -f '$MFT' -e resident-streams
 ```
 
 - Without `-o` or `-t`, only the summary is shown. CSV has one row per entry (the columns of
-  `mft_dump`); JSON / JSONL have every attribute of every entry.
+  `mft_dump`, ending with the `$STANDARD_INFORMATION` and `$FILE_NAME` MFT-modified times); JSON /
+  JSONL have every attribute of every entry and its `full_path`. Times keep the 100 ns precision of
+  NTFS (7 decimal places).
 - With `-d`, files named `$MFT` (or ending in `$MFT`) are parsed; `-o` is a directory with one
   file per `$MFT`, named after its path (`HOST1/C/$MFT` → `HOST1_C__MFT.csv`).
-- Full paths use `/`. A file whose parent directory's record was reused is `[Orphaned]`; a deleted
-  file in a deleted directory keeps its path; an unresolvable parent is `[Unknown]`.
-- Extracted streams are named `<full path>__<entry>-<sequence>_<stream number>_<stream name>.dontrun`;
-  characters that are unsafe in file names become `_`. They are evidence: do not run them.
+- Full paths use `\`, as Windows shows them, with the long names that extension records hold. A
+  file whose parent directory's record was reused is `[Orphaned]` (unless the old directory left its
+  name in an extension record); a deleted file in a deleted directory keeps its path; a parent that
+  can't be read is `[Unknown]`.
+- Extracted streams are named `<full path>__<entry>-<sequence>_<stream number>_<stream name>.dontrun`
+  and include the streams stored in extension records; empty streams are not written. Characters
+  that are unsafe in file names become `_`. They are evidence: do not run them.
 - Damaged or crafted records do not crash the run: a file without a usable FILE record header is
-  skipped, a parent-reference loop gives an `[Unknown]` path, and unreadable entries are counted.
+  skipped, a parent-reference loop is cut (an `[Orphaned]` path), and unreadable entries are
+  counted.
 
 $MFT parsing and the CSV / JSON formats come from Yamato Security's
 [ys-mft-parser](https://github.com/Yamato-Security/ys-mft-parser), a maintained fork of Omer

@@ -12,6 +12,7 @@ use mft::attribute::MftAttributeType;
 use mft::csv::FlatMftEntryWithName;
 use mft::entry::ZERO_HEADER;
 use mft::{MftEntry, MftParser};
+use serde::Serialize;
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
@@ -267,15 +268,27 @@ fn parse_one(
                 continue;
             }
         };
-        let row = FlatMftEntryWithName::from_entry(&entry, &mut parser);
+        let full_path = parser.get_full_path_for_entry(&entry).ok().flatten();
+        // CSV rows and exported streams describe a file rather than one record, so they include
+        // the attributes stored in its extension records.
+        let extensions = parser.get_extension_entries(&entry);
+        let row = FlatMftEntryWithName::from_entry_with_path(
+            &entry,
+            &extensions,
+            full_path.clone().unwrap_or_default(),
+        );
         stats.add(&entry, &row);
+        // An extension record's streams are exported with its base entry, under the file's path.
+        // Only an extension record that its base entry doesn't list exports its own.
         if let Some(dir) = extract_dir
-            && let Ok(Some(full_path)) = parser.get_full_path_for_entry(&entry)
+            && (entry.header.is_base_record() || !is_listed_by_its_base(&mut parser, &entry))
+            && let Some(path) = &full_path
         {
-            stats.streams += extract_resident_streams(&entry, &full_path, dir)?;
+            stats.streams +=
+                extract_resident_streams(&entry, &extensions, &path.to_string_lossy(), dir)?;
         }
         if let Some(w) = writer.as_deref_mut() {
-            w.write(&entry, &row)?;
+            w.write(&entry, full_path, &row)?;
         }
     }
     if printed < stats.unreadable && stats.unreadable > MAX_PRINTED_ERRORS {
@@ -306,17 +319,22 @@ impl EntryWriter {
         }
     }
 
-    /// mft_dump's formats: a CSV row per entry, or the entry as JSON (pretty, newline-separated)
-    /// or as one JSON line.
-    fn write(&mut self, entry: &MftEntry, row: &FlatMftEntryWithName) -> io::Result<()> {
+    /// mft_dump's formats: a CSV row per entry, or the entry and its full path as JSON (pretty,
+    /// newline-separated) or as one JSON line.
+    fn write(
+        &mut self,
+        entry: &MftEntry,
+        full_path: Option<PathBuf>,
+        row: &FlatMftEntryWithName,
+    ) -> io::Result<()> {
         match self {
             EntryWriter::Csv(w) => w.serialize(row).map_err(io::Error::other),
             EntryWriter::Json(w) => {
-                serde_json::to_writer_pretty(&mut *w, entry)?;
+                serde_json::to_writer_pretty(&mut *w, &JsonEntry { full_path, entry })?;
                 w.write_all(b"\n")
             }
             EntryWriter::Jsonl(w) => {
-                serde_json::to_writer(&mut *w, entry)?;
+                serde_json::to_writer(&mut *w, &JsonEntry { full_path, entry })?;
                 w.write_all(b"\n")
             }
         }
@@ -330,19 +348,55 @@ impl EntryWriter {
     }
 }
 
-/// Write the resident $DATA streams of an entry to `dir` with the names ys-mft-parser's `mft_dump`
-/// gives them: `<full path>__<entry>-<sequence>_<stream number>_<stream name>.dontrun`. The names
-/// come from the evidence, so every character that is not safe in a file name (separators, `:`,
-/// control characters, …) becomes `_`; the entry number keeps the names unique.
-fn extract_resident_streams(entry: &MftEntry, full_path: &str, dir: &Path) -> io::Result<usize> {
+/// One JSON entry as `mft_dump` writes it: the entry with its full path (`\` separators).
+#[derive(Serialize)]
+struct JsonEntry<'a> {
+    #[serde(serialize_with = "mft::serialize_option_windows_path")]
+    full_path: Option<PathBuf>,
+    #[serde(flatten)]
+    entry: &'a MftEntry,
+}
+
+/// Whether `entry` is one of the extension records that its base entry's `$ATTRIBUTE_LIST` leads
+/// to.
+fn is_listed_by_its_base(
+    parser: &mut MftParser<impl io::Read + io::Seek>,
+    entry: &MftEntry,
+) -> bool {
+    let record_number = entry.header.record_number;
+    parser
+        .get_entry(entry.header.base_reference.entry)
+        .is_ok_and(|base| {
+            parser
+                .get_extension_entries(&base)
+                .iter()
+                .any(|e| e.header.record_number == record_number)
+        })
+}
+
+/// Write the resident $DATA streams of an entry and its extension records to `dir` with the names
+/// ys-mft-parser's `mft_dump` gives them:
+/// `<full path>__<entry>-<sequence>_<stream number>_<stream name>.dontrun`. Empty streams are
+/// skipped. The names come from the evidence, so every character that is not safe in a file name
+/// (separators, `:`, control characters, …) becomes `_`; the entry number keeps the names unique.
+fn extract_resident_streams(
+    entry: &MftEntry,
+    extensions: &[MftEntry],
+    full_path: &str,
+    dir: &Path,
+) -> io::Result<usize> {
     let mut written = 0;
-    let streams = entry
-        .iter_attributes()
+    let streams = std::iter::once(entry)
+        .chain(extensions)
+        .flat_map(MftEntry::iter_attributes)
         .filter_map(Result::ok)
         .filter(|a| a.header.type_code == MftAttributeType::DATA)
         .filter_map(|a| {
             let name = a.header.name.to_utf8_string();
-            a.data.as_data().map(|d| (name, d.data().to_vec()))
+            a.data
+                .as_data()
+                .filter(|d| !d.data().is_empty())
+                .map(|d| (name, d.data().to_vec()))
         });
     for (i, (name, data)) in streams.enumerate() {
         let file_name = format!(

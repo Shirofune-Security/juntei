@@ -24,7 +24,7 @@ csv = "1"
 indicatif = "0.18"
 # $MFT parsing: Yamato Security's ys-mft-parser, a fork of Omer Ben-Amram's mft crate
 # (MIT / Apache-2.0), pinned to a commit, without its mft_dump binary.
-mft = { git = "https://github.com/Yamato-Security/ys-mft-parser", rev = "9ccde49d1ac252e64fa44af86adde6695989531a", default-features = false }
+mft = { git = "https://github.com/Yamato-Security/ys-mft-parser", rev = "9398de862b6ba716c1a4a25d9566c77273063ce8", default-features = false }
 # Prefetch parsing: Yamato Security's ys-prefetch-parser, a fork of Samuel Garcés Marín's
 # frnsc-prefetch crate (MIT), pinned to a commit.
 frnsc-prefetch = { git = "https://github.com/Yamato-Security/ys-prefetch-parser", rev = "ef0ef23f649334981d28b8d76eb1608e6f69fbec" }
@@ -32,12 +32,12 @@ serde_json = "1"
 # USN journal parsing: Yamato Security's ys-usn-journal-parser, a fork of sootmark-usn
 # (MIT OR Apache-2.0), pinned to a commit; its `mft` feature seeds paths from the $MFT with the
 # same ys-mft-parser commit as above.
-usn = { package = "sootmark-usn", git = "https://github.com/Yamato-Security/ys-usn-journal-parser", rev = "dd3f51fce43626d9e39ddc0991edc7b4c5100f22", features = ["mft"] }
+usn = { package = "sootmark-usn", git = "https://github.com/Yamato-Security/ys-usn-journal-parser", rev = "4630df5acbca0e2476b595f7c38c93e082bead9e", features = ["mft"] }
 # LNK parsing: Yamato Security's ys-lnk-parser, a fork of sootmark-shell (MIT OR Apache-2.0),
 # pinned to a commit, with its code pages for links from non-Western systems.
 shell = { package = "sootmark-shell", git = "https://github.com/Yamato-Security/ys-lnk-parser", rev = "cc27ef31eb7a9ffeec46914f1b23d836eb0c6357", features = ["codepages"] }
-# The order of parse-srum's JSON columns.
-serde = "1"
+# The order of parse-srum's JSON columns, and parse-mft's JSON entries (as mft_dump writes them).
+serde = { version = "1", features = ["derive"] }
 # SRUM parsing: Yamato Security's ys-srum-parser, a fork of Sootmark's ese and srum crates
 # (MIT OR Apache-2.0), pinned to a commit.
 srum = { package = "sootmark-srum", git = "https://github.com/Yamato-Security/ys-srum-parser", rev = "451e1d445c635be0b23fad374c0efa2bc1c296ea" }
