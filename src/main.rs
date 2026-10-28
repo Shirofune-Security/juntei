@@ -4,6 +4,7 @@ mod amcache;
 mod cli;
 mod color;
 mod hive;
+mod jump_lists;
 mod lnk;
 mod mft;
 mod mftecmd;
@@ -96,6 +97,17 @@ fn main() {
                 display_logo(opts.common.quiet, opts.common.no_color, true, false);
             }
             let code = lnk::run(opts);
+            if !data_only {
+                print_elapsed(start, opts.common.no_color);
+            }
+            code
+        }
+        Commands::ParseJumpLists(opts) => {
+            let data_only = opts.data_on_stdout();
+            if !data_only {
+                display_logo(opts.common.quiet, opts.common.no_color, true, false);
+            }
+            let code = jump_lists::run(opts);
             if !data_only {
                 print_elapsed(start, opts.common.no_color);
             }

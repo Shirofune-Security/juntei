@@ -35,7 +35,11 @@ serde_json = "1"
 usn = { package = "sootmark-usn", git = "https://github.com/Yamato-Security/ys-usn-journal-parser", rev = "4630df5acbca0e2476b595f7c38c93e082bead9e", features = ["mft"] }
 # LNK parsing: Yamato Security's ys-lnk-parser, a fork of sootmark-shell (MIT OR Apache-2.0),
 # pinned to a commit, with its code pages for links from non-Western systems.
-shell = { package = "sootmark-shell", git = "https://github.com/Yamato-Security/ys-lnk-parser", rev = "cc27ef31eb7a9ffeec46914f1b23d836eb0c6357", features = ["codepages"] }
+shell = { package = "sootmark-shell", git = "https://github.com/Yamato-Security/ys-lnk-parser", rev = "6c49bc9b80a992dd5155b406dd83d055d311445c", features = ["codepages"] }
+# Jump list parsing: Yamato Security's ys-jump-lists-parser (from sootmark-shell's jump list and
+# compound file code, MIT OR Apache-2.0), pinned to a commit; it reads links with the same
+# ys-lnk-parser commit as above.
+jumplist = { package = "ys-jump-lists", git = "https://github.com/Yamato-Security/ys-jump-lists-parser", rev = "0df5316f1687b14e330d7d64d644221f9a43f24e", features = ["codepages"] }
 # The order of parse-srum's JSON columns, and parse-mft's JSON entries (as mft_dump writes them).
 serde = { version = "1", features = ["derive"] }
 # SRUM parsing: Yamato Security's ys-srum-parser, a fork of Sootmark's ese and srum crates
