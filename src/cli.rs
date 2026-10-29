@@ -283,7 +283,7 @@ pub struct MftOptions {
     #[arg(help_heading = Some("Output"), short = 'o', long, value_name = "PATH", display_order = 300)]
     pub output: Option<PathBuf>,
 
-    /// Output type: csv (default, MFTECmd's columns), ys-mft-parser-csv, json, jsonl. Without -o, the entries are written to stdout
+    /// Output type: csv (default), ys-mft-parser-csv, json, jsonl. Without -o, the entries are written to stdout
     #[arg(help_heading = Some("Output"), short = 't', long = "output-type", value_name = "TYPE", value_enum, hide_possible_values = true, display_order = 301)]
     pub output_type: Option<MftOutputType>,
 
@@ -295,12 +295,12 @@ pub struct MftOptions {
     #[arg(help_heading = Some("Output"), short = 'C', long, display_order = 303)]
     pub clobber: bool,
 
-    /// Write every $FILE_NAME time, not only those that differ from $STANDARD_INFORMATION (MFTECmd's --at)
-    #[arg(help_heading = Some("CSV Output"), long, display_order = 400)]
+    /// Write every $FILE_NAME time, not only those that differ from $STANDARD_INFORMATION
+    #[arg(help_heading = Some("CSV Output"), short = 'a', long, display_order = 400)]
     pub all_times: bool,
 
-    /// Write rows for DOS (8.3) names too (MFTECmd's --sn)
-    #[arg(help_heading = Some("CSV Output"), long, display_order = 401)]
+    /// Write rows for DOS (8.3) names too
+    #[arg(help_heading = Some("CSV Output"), short = 's', long, display_order = 401)]
     pub short_names: bool,
 
     /// Only records whose $STANDARD_INFORMATION created or modified time is on or after DATE, in UTC unless an offset is given (ex: 2025-10-19, 2025-10-19T13:45:30Z)
