@@ -6,14 +6,16 @@ authors = ["Yamato Security @SecurityYamato"]
 description = "Windows forensics artifact parser"
 license = "AGPL-3.0-only"
 edition = "2024"
-rust-version = "1.90"
+rust-version = "1.99"
 include = ["src/**/*", "art/**/*", "LICENSE", "README.md", "CHANGELOG.md"]
 
-# Every dependency has an explicit floor rather than "*": a wildcard accepts any future
-# release, including a breaking one, on the next `cargo update`.
+# Every crates.io dependency has an explicit floor rather than "*": a wildcard accepts any future
+# release, including a breaking one, on the next `cargo update`. The parsers are Yamato Security's
+# own and follow their main branches: Cargo.lock records the commits used, and `cargo update`
+# moves to the latest.
 [dependencies]
-# Amcache parsing and output: Yamato Security's ys-amcache-parser (Apache-2.0), pinned to a commit.
-amcache-forensic = { git = "https://github.com/Yamato-Security/ys-amcache-parser", rev = "3bfc944a9b5c4c46b94bda12ca6b9af9f83c255a" }
+# Amcache parsing and output: Yamato Security's ys-amcache-parser (Apache-2.0).
+amcache-forensic = { package = "ys-amcache-parser", git = "https://github.com/Yamato-Security/ys-amcache-parser" }
 bytesize = "2"
 # The Observation trait gives the severity of an Amcache finding; the system-binary and
 # staging-directory lists drive the Prefetch findings.
@@ -23,36 +25,35 @@ clap = { version = "4.5", features = ["derive"] }
 csv = "1"
 indicatif = "0.18"
 # $MFT parsing: Yamato Security's ys-mft-parser, a fork of Omer Ben-Amram's mft crate
-# (MIT / Apache-2.0), pinned to a commit, without its ys-mft-parser command.
-mft = { git = "https://github.com/Yamato-Security/ys-mft-parser", rev = "9398de862b6ba716c1a4a25d9566c77273063ce8", default-features = false }
+# (MIT / Apache-2.0), without its ys-mft-parser command.
+mft = { package = "ys-mft-parser", git = "https://github.com/Yamato-Security/ys-mft-parser", default-features = false }
 # Prefetch parsing: Yamato Security's ys-prefetch-parser, a fork of Samuel Garcés Marín's
-# frnsc-prefetch crate (MIT), pinned to a commit.
-frnsc-prefetch = { git = "https://github.com/Yamato-Security/ys-prefetch-parser", rev = "ef0ef23f649334981d28b8d76eb1608e6f69fbec" }
+# frnsc-prefetch crate (MIT).
+frnsc-prefetch = { package = "ys-prefetch-parser", git = "https://github.com/Yamato-Security/ys-prefetch-parser" }
 serde_json = "1"
 # USN journal parsing: Yamato Security's ys-usn-journal-parser, a fork of sootmark-usn
-# (MIT OR Apache-2.0), pinned to a commit; its `mft` feature seeds paths from the $MFT with the
-# same ys-mft-parser commit as above.
-usn = { package = "sootmark-usn", git = "https://github.com/Yamato-Security/ys-usn-journal-parser", rev = "4630df5acbca0e2476b595f7c38c93e082bead9e", features = ["mft"] }
+# (MIT OR Apache-2.0); its `mft` feature seeds paths from the $MFT with the same ys-mft-parser as
+# above.
+usn = { package = "ys-usn-journal-parser", git = "https://github.com/Yamato-Security/ys-usn-journal-parser", features = ["mft"] }
 # LNK parsing: Yamato Security's ys-lnk-parser, a fork of sootmark-shell (MIT OR Apache-2.0),
-# pinned to a commit, with its code pages for links from non-Western systems.
-shell = { package = "sootmark-shell", git = "https://github.com/Yamato-Security/ys-lnk-parser", rev = "6c49bc9b80a992dd5155b406dd83d055d311445c", features = ["codepages"] }
+# with its code pages for links from non-Western systems.
+shell = { package = "ys-lnk-parser", git = "https://github.com/Yamato-Security/ys-lnk-parser", features = ["codepages"] }
 # Jump list parsing: Yamato Security's ys-jump-lists-parser (from sootmark-shell's jump list and
-# compound file code, MIT OR Apache-2.0), pinned to a commit; it reads links with the same
-# ys-lnk-parser commit as above.
-jumplist = { package = "ys-jump-lists", git = "https://github.com/Yamato-Security/ys-jump-lists-parser", rev = "0df5316f1687b14e330d7d64d644221f9a43f24e", features = ["codepages"] }
+# compound file code, MIT OR Apache-2.0); it reads links with the same ys-lnk-parser as above.
+jumplist = { package = "ys-jump-lists-parser", git = "https://github.com/Yamato-Security/ys-jump-lists-parser", features = ["codepages"] }
 # ShimCache parsing: Yamato Security's ys-shimcache-parser, a fork of Security Ronin's
-# shimcache-forensic (Apache-2.0), pinned to a commit: its own SYSTEM hive reader with
-# transaction log replay, every control set, and the findings.
-shimcache-forensic = { git = "https://github.com/Yamato-Security/ys-shimcache-parser", rev = "10c6ff14a8be8cafcf45f9cd8b5c111fa8b1a4c5" }
+# shimcache-forensic (Apache-2.0): its own SYSTEM hive reader with transaction log replay, every
+# control set, and the findings.
+shimcache-forensic = { package = "ys-shimcache-parser", git = "https://github.com/Yamato-Security/ys-shimcache-parser" }
 # The order of parse-srum's JSON columns, and parse-mft's JSON entries (as ys-mft-parser writes them).
 serde = { version = "1", features = ["derive"] }
 # SRUM parsing: Yamato Security's ys-srum-parser, a fork of Sootmark's ese and srum crates
-# (MIT OR Apache-2.0), pinned to a commit.
-srum = { package = "sootmark-srum", git = "https://github.com/Yamato-Security/ys-srum-parser", rev = "451e1d445c635be0b23fad374c0efa2bc1c296ea" }
+# (MIT OR Apache-2.0).
+srum = { package = "ys-srum-parser", git = "https://github.com/Yamato-Security/ys-srum-parser" }
 termcolor = "1"
 # Defender quarantine parsing: Yamato Security's ys-defender-history-parser, a fork of
-# sootmark-defender (MIT OR Apache-2.0), pinned to a commit.
-defender = { package = "sootmark-defender", git = "https://github.com/Yamato-Security/ys-defender-history-parser", rev = "599ab7ab15444aecf61efcd1c1402a151df944b9" }
+# sootmark-defender (MIT OR Apache-2.0).
+defender = { package = "ys-defender-history-parser", git = "https://github.com/Yamato-Security/ys-defender-history-parser" }
 
 [dev-dependencies]
 # The SYSTEM hive of test_files/shimcache/ is kept gzipped.
