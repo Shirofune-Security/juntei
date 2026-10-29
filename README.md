@@ -108,8 +108,7 @@ for every field.
 
 Parses the NTFS Master File Table (`$MFT`): one record per file and directory, including deleted
 ones, with the full path, flags, sizes, `$STANDARD_INFORMATION` and `$FILE_NAME` timestamps,
-alternate data streams and the timestomping indicators. The CSV has the columns of Eric
-Zimmerman's MFTECmd, computed as MFTECmd computes them.
+alternate data streams and the timestomping indicators.
 
 ```
 Input:
@@ -139,7 +138,7 @@ Display Settings:
 # Entry counts (in use, deleted, directories, alternate data streams, damaged entries)
 juntei parse-mft -f '$MFT'
 
-# Every file name and alternate data stream as CSV, with MFTECmd's columns
+# Every file name and alternate data stream as CSV
 juntei parse-mft -f '$MFT' -o mft.csv
 
 # Only what was created or modified since an incident began, every $FILE_NAME time included
@@ -156,10 +155,10 @@ juntei parse-mft -f '$MFT' -e resident-streams
 ```
 
 - Without `-o` or `-t`, only the summary is shown.
-- CSV has MFTECmd's 35 columns and rows, in its order (in-use records, then free ones): one row
+- CSV has 35 columns, and its rows in order (in-use records, then free ones): one row
   per file name (hard links each have one; DOS 8.3 names only with `--short-names`) and one more
   per alternate data stream (`IsAds`, with `ZoneIdContents` for `Zone.Identifier`). The columns
-  include the parent entry and sequence numbers, `ParentPath` as MFTECmd builds it (`.\Windows\System32`;
+  include the parent entry and sequence numbers, `ParentPath` (`.\Windows\System32`;
   `.\PathUnknown\Directory with ID 0x…` when the chain doesn't reach the root), `FileName` and
   `Extension`, both sets of four timestamps (the `0x30` ones only where they differ, unless
   `--all-times`), `UpdateSequenceNumber`, `LogfileSequenceNumber`, `SecurityId`, `SiFlags`,
@@ -167,9 +166,8 @@ juntei parse-mft -f '$MFT' -e resident-streams
   timestomping indicators: `SI<FN` (`$STANDARD_INFORMATION` created before a different `$FILE_NAME`
   created), `uSecZeros` (created or modified on a whole millisecond) and `Copied` (modified before
   created). Times are RFC 3339 UTC with NTFS's 100 ns (`2007-06-30T12:50:52.2523952Z`), as in
-  juntei's other output; MFTECmd writes `2007-06-30 12:50:52.2523952`. `ParseErrors` holds
-  juntei's own descriptions of damaged records and of their extension records (MFTECmd leaves
-  the extension records' out).
+  juntei's other output. `ParseErrors` holds juntei's own descriptions of damaged records and of
+  their extension records.
 - `-t ys-mft-parser-csv` has the columns of the `ys-mft-parser` command's CSV instead (upstream's
   `mft_dump`; `-t mft-dump-csv` still works): one row per entry, ending with the
   `$STANDARD_INFORMATION` and `$FILE_NAME` MFT-modified times. JSON / JSONL have every attribute
@@ -191,7 +189,7 @@ $MFT parsing, ys-mft-parser's CSV and the JSON format come from Yamato Security'
 [ys-mft-parser](https://github.com/Yamato-Security/ys-mft-parser), a maintained fork of Omer
 Ben-Amram's [mft](https://github.com/omerbenamram/mft) crate (MIT / Apache-2.0). On eight `$MFT`
 files (the mft crate's sample, the NIST hacking case and six from DFIRArtifactMuseum; 1,048,733
-rows), every row and column of the CSV, in order, equals MFTECmd 2026.10.6's (built from source),
+rows), every row and column of the CSV, in order, equals a reference parser's (built from source),
 with and without `--all-times` and `--short-names` and with `--cutoff`, apart from the time format.
 
 ### `parse-prefetch`
@@ -296,9 +294,9 @@ juntei parse-usn-journal -d triage/ -o usn-jsonl -t jsonl
 juntei parse-usn-journal -f disk.raw --carve -o carved.csv
 ```
 
-- CSV has MFTECmd's `$J` columns, in its order (`Name`, `Extension`, `EntryNumber`, `SequenceNumber`,
+- CSV has the columns `Name`, `Extension`, `EntryNumber`, `SequenceNumber`,
   `ParentEntryNumber`, `ParentSequenceNumber`, `ParentPath`, `UpdateSequenceNumber`,
-  `UpdateTimestamp`, `UpdateReasons`, `FileAttributes`, `OffsetToData`, `SourceFile`), then
+  `UpdateTimestamp`, `UpdateReasons`, `FileAttributes`, `OffsetToData`, `SourceFile`, then
   `SourceInfo`, `SecurityId` and `Version`. Reasons and attributes use Windows' names joined with `|`
   (`FILE_CREATE|CLOSE`), unknown bits in hex. JSON / JSONL have every field, and the range-tracking
   (V4) records with their extents.
@@ -306,8 +304,9 @@ juntei parse-usn-journal -f disk.raw --carve -o carved.csv
   creations and deletions, once to give each record the path its directory had then. With the
   volume's `$MFT` (`-m`, or found next to the journal's `$Extend` directory in KAPE-style layouts),
   directories the journal does not name are known too. A directory nobody knows shows as
-  `[Unknown <entry>-<sequence>]`. On six real journals, the paths equal MFTECmd's `ParentPath`
-  wherever MFTECmd resolves one, and 4,321 records MFTECmd leaves as `PathUnknown` are resolved.
+  `[Unknown <entry>-<sequence>]`. On six real journals, the paths equal the parent paths an
+  independent parser gives wherever it resolves one, and 4,321 records it leaves unresolved are
+  resolved.
 - With `-d`, files named `$J` (or ending in `$J`) are parsed; `-o` is a directory with one file per
   journal, named after its path (`HOST1/C/$Extend/$J` → `HOST1_C__Extend__J.csv`).
 - `--carve` reads any file 8 bytes at a time and keeps only records laid out exactly as NTFS writes
@@ -358,21 +357,21 @@ juntei parse-srum -d triage/ -o srum
 juntei parse-srum -f SRUDB.dat -t jsonl | jq 'select(.Provider == "NetworkUsages")'
 ```
 
-- CSV output is a directory with one table per provider, named as Eric Zimmerman's SrumECmd names
-  them (`NetworkUsages.csv`, `AppResourceUseInfo.csv`, `NetworkConnections.csv`,
-  `AppTimelineProvider.csv`, `vfuprov.csv`, `EnergyUsage.csv` with the long-term table's rows
-  marked by `IsLt`, `PushNotifications.csv`, and on Windows Server `ProcessorTime.csv`,
-  `SizeInBytes.csv`, `TotalUsed.csv`, `NetworkBytes.csv`), a table it doesn't know under its own
-  name, and `SruDbIdMapTable.csv`, the ids the entries refer to. JSON / JSONL have one object per
-  entry with the same columns, after `SourceFile`, `Table` and `Provider`.
-- Every table starts with SrumECmd's columns: `Id`, `Timestamp`, the program (`ExeInfo`, with
+- CSV output is a directory with one table per provider (`NetworkUsages.csv`,
+  `AppResourceUseInfo.csv`, `NetworkConnections.csv`, `AppTimelineProvider.csv`, `vfuprov.csv`,
+  `EnergyUsage.csv` with the long-term table's rows marked by `IsLt`, `PushNotifications.csv`, and
+  on Windows Server `ProcessorTime.csv`, `SizeInBytes.csv`, `TotalUsed.csv`, `NetworkBytes.csv`), a
+  table it doesn't know under its own name, and `SruDbIdMapTable.csv`, the ids the entries refer to.
+  JSON / JSONL have one object per entry with the same columns, after `SourceFile`, `Table` and
+  `Provider`.
+- Every table starts with the same columns: `Id`, `Timestamp`, the program (`ExeInfo`, with
   `!!name!date!…!description` ids split into `ExeInfoDescription` and `ExeTimestamp`), `AppType`
   (`NormalApp`, `Service`, `ModernApp`, `Object`), the account (`Sid`, `UserName`) and the raw
   `UserId` and `AppId`. Then the table's own columns as the database names them, FILETIME columns
   (`ConnectStartTime`, `EndTime`, …) as times, `InterfaceType` after `InterfaceLuid`
   (`IF_TYPE_IEEE80211`, …) and `ProfileName` after `L2ProfileId`. Times are UTC (RFC 3339);
-  `Timestamp` is rounded to the millisecond as SrumECmd rounds it.
-- Account and Wi-Fi names come from the SOFTWARE hive, read as SrumECmd reads it (`ProfileList`
+  `Timestamp` is rounded to the millisecond.
+- Account and Wi-Fi names come from the SOFTWARE hive (`ProfileList`
   and the `WlanSvc` profiles): `-r`, or found in the same collection (`Windows/System32/config/SOFTWARE`
   next to `sru/`, or a `SOFTWARE` next to the database). A hive that can't be read is reported and
   the entries are written without names.
@@ -417,7 +416,7 @@ Display Settings:
 # Targets, machines, time range and findings on the terminal
 juntei parse-lnk -d C/Users/alice/AppData/Roaming/Microsoft/Windows/Recent
 
-# One CSV row per shortcut, with LECmd's columns
+# One CSV row per shortcut
 juntei parse-lnk -d triage/ -o lnk.csv
 
 # Shortcuts made on a Japanese system (ANSI text in code page 932)
@@ -427,13 +426,12 @@ juntei parse-lnk -d triage/ --code-page 932 -o lnk.csv
 juntei parse-lnk -f invoice.pdf.lnk -t jsonl | jq .
 ```
 
-- CSV has Eric Zimmerman's LECmd columns (`SourceFile` … `FileDroidBirth`, with `Anomalies` named
-  `Problems`) and then `IconIndex`, `HotKey`, `IconEnvironment`, `KnownFolder`, `SpecialFolder`,
-  `DarwinId`, `ShimLayer`, `NetworkDevice`, `NetworkProvider`, `ConsoleCodePage` and
-  `AppendedBytes`. Times are UTC (RFC 3339) and the source file's own times come from the file
-  system. JSON / JSONL have one object per shortcut with every field: each target item (its type,
-  name, MFT reference and times), the extra data blocks, the property stores (with property names)
-  and the console settings.
+- CSV has the columns `SourceFile` … `FileDroidBirth`, `Problems`, and then `IconIndex`, `HotKey`,
+  `IconEnvironment`, `KnownFolder`, `SpecialFolder`, `DarwinId`, `ShimLayer`, `NetworkDevice`,
+  `NetworkProvider`, `ConsoleCodePage` and `AppendedBytes`. Times are UTC (RFC 3339) and the source
+  file's own times come from the file system. JSON / JSONL have one object per shortcut with every
+  field: each target item (its type, name, MFT reference and times), the extra data blocks, the
+  property stores (with property names) and the console settings.
 - Findings on the terminal: a name, relative path or working directory that claims more than 260
   characters (Windows reads only 260, so the arguments Windows runs hide inside it from tools that
   trust the count; they're read as Windows reads them), data after the end of the link, and shells
@@ -448,10 +446,10 @@ LNK parsing comes from Yamato Security's
 [ys-lnk-parser](https://github.com/Yamato-Security/ys-lnk-parser), a maintained fork of Sootmark's
 [shell](https://github.com/Sootmark/shell) crate (MIT OR Apache-2.0) with features and fixes from
 other LNK parsers. On 1,118 links from public test sets, the 30 columns `parse-lnk` shares with
-LECmd have LECmd's values except 16: 13 target paths (LECmd shows a damaged item or cuts a name in
-4 and a placeholder in 6, and names an MTP device or Control Panel applet that `parse-lnk` doesn't
-in 3), 2 lists of extra data blocks (blocks with unknown signatures or cut off, which LECmd calls
-`DamagedDataBlock`) and 1 MFT reference LECmd reads from the wrong bytes.
+a reference LNK parser have its values except 16: 13 target paths (the reference shows a damaged
+item or cuts a name in 4 and a placeholder in 6, and names an MTP device or Control Panel applet
+that `parse-lnk` doesn't in 3), 2 lists of extra data blocks (blocks with unknown signatures or
+cut off, which it calls `DamagedDataBlock`) and 1 MFT reference it reads from the wrong bytes.
 
 ### `parse-jump-lists`
 
@@ -485,25 +483,25 @@ Display Settings:
 # Applications, machines, time range and findings on the terminal
 juntei parse-jump-lists -d C/Users/alice/AppData/Roaming/Microsoft/Windows/Recent
 
-# JLECmd's two CSV tables: jl/AutomaticDestinations.csv and jl/CustomDestinations.csv
+# Two CSV tables: jl/AutomaticDestinations.csv and jl/CustomDestinations.csv
 juntei parse-jump-lists -d triage/ -o jl
 
 # Every entry, link and property as JSON Lines, one jump list per line
 juntei parse-jump-lists -f f01b4d95cf55d32a.automaticDestinations-ms -t jsonl | jq .
 ```
 
-- CSV has Eric Zimmerman's JLECmd's columns: `AutomaticDestinations.csv` (`SourceFile` …
-  `Notes`: one row per `DestList` entry with its link, and one per link stream no entry names,
-  noted `Found in Directory, not DestList` as JLECmd writes them with `--withDir`) and then
+- CSV has two tables: `AutomaticDestinations.csv` (`SourceFile` … `Notes`: one row per
+  `DestList` entry with its link, and one per link stream no entry names, noted
+  `Found in Directory, not DestList`) and then
   `DisplayPath` (shell namespace GUIDs named), `PinPosition`, `NetworkPath`, `Name`, `IconLocation`
   and `Problems`; `CustomDestinations.csv` (`SourceFile` … `Arguments`: one row per link, with its
   category in `EntryName`, `Tasks` for tasks) and then `Notes` (links left over after the last
   category), `NetworkPath`, `Name`, `IconLocation` and `Problems`. `EntryNumber` is in hexadecimal
-  (the stream's name), as JLECmd writes it. Times are UTC (RFC 3339). JSON / JSONL have one object
+  (the stream's name). Times are UTC (RFC 3339). JSON / JSONL have one object
   per jump list with every field: the `DestList` header, each entry (with its score, checksum and
   property store) and its link as `parse-lnk` writes one, the `DestListPropertyStore`, the streams,
   each custom category, the bytes after the last one and the links in them.
-- Application names come from Eric Zimmerman's list of AppIDs.
+- Application names come from a list of known AppIDs.
 - Findings on the terminal: links left over from an earlier version of a custom list (Windows
   rewrites the file in place, and when the new list is shorter, the end of the old one stays: a
   browser's recently closed pages, say), link streams no `DestList` entry names (removed or
@@ -518,9 +516,9 @@ Jump list parsing comes from Yamato Security's
 [ys-jump-lists-parser](https://github.com/Yamato-Security/ys-jump-lists-parser), built from the
 jump list and compound file code of Sootmark's [shell](https://github.com/Sootmark/shell) crate
 (MIT OR Apache-2.0), with links read by ys-lnk-parser. On the 77 public jump lists it was compared
-on, every one of the 13,057 cells `parse-jump-lists` shares with JLECmd 2026.10 (times to 100 ns)
-has JLECmd's value, and the six files JLECmd refuses (empty custom lists, a missing footer, a file
-that isn't a jump list) are read or reported.
+on, every one of the 13,057 cells `parse-jump-lists` shares with a reference jump list parser
+(times to 100 ns) has its value, and the six files it refuses (empty custom lists, a missing
+footer, a file that isn't a jump list) are read or reported.
 
 ### `parse-shimcache`
 
@@ -550,7 +548,7 @@ Display Settings:
 # Caches, entries, time range and findings on the terminal
 juntei parse-shimcache -f C/Windows/System32/config/SYSTEM
 
-# One CSV row per entry, with AppCompatCacheParser's columns, for every host of a triage collection
+# One CSV row per entry, for every host of a triage collection
 juntei parse-shimcache -d triage/ -o shimcache.csv
 
 # Every field (flags, data, packaged app records, findings) as JSON Lines
@@ -566,13 +564,12 @@ juntei parse-shimcache -f SYSTEM -t jsonl | jq .
   hive, even when its base block is damaged (the logs give it one); without usable logs, entries
   may be missing, and the summary says so. Entries left in the slack
   of the cache's value (dropped from the cache, Windows 8 to 11) are recovered (`FromSlack`).
-- CSV has Eric Zimmerman's AppCompatCacheParser's columns (`ControlSet` … `FromSlack`), with its
-  `Executed` (`Yes`, `No`, or `NA` where the format has no flag: Windows XP and 32-bit Vista), and
-  then `CacheFormat`, `CacheLastWrittenUTC` (when Windows last saved the cache), `InsertFlags`,
-  `ShimFlags`, `DataSize`, `Machine` (x64, x86, ARM64; Windows 10 and 11), `FileSize` and
-  `LastUpdateTimeUTC` (Windows XP), a packaged app's `PackageName`, `PackageVersion` and
-  `PackagePublisherId`, and `Findings`. Times are UTC (RFC 3339). JSON / JSONL have one object per
-  entry with every field, its data and the records in it.
+- CSV has the columns `ControlSet` … `FromSlack`, with `Executed` (`Yes`, `No`, or `NA` where the
+  format has no flag: Windows XP and 32-bit Vista), and then `CacheFormat`, `CacheLastWrittenUTC`
+  (when Windows last saved the cache), `InsertFlags`, `ShimFlags`, `DataSize`, `Machine` (x64, x86,
+  ARM64; Windows 10 and 11), `FileSize` and `LastUpdateTimeUTC` (Windows XP), a packaged app's
+  `PackageName`, `PackageVersion` and `PackagePublisherId`, and `Findings`. Times are UTC (RFC
+  3339). JSON / JSONL have one object per entry with every field, its data and the records in it.
 - `-f` also takes an AppCompatCache value on its own (its bytes, exported from the registry or
   carved), read without a control set.
 - Findings on the terminal: Windows system binaries recorded outside `System32` / `SysWOW64`
@@ -587,8 +584,7 @@ ShimCache parsing comes from Yamato Security's
 of Security Ronin's [shimcache-forensic](https://github.com/SecurityRonin/shimcache-forensic)
 (Apache-2.0) with its own registry hive reader and transaction log replay. On the 20 public
 `SYSTEM` hives (24 control sets, 7,290 entries) and 17 AppCompatCache values it was compared on,
-every entry has the path, time, execution flag, flags and position Eric Zimmerman's
-AppCompatCacheParser 2026.10.1 gives it.
+every entry has the path, time, execution flag, flags and position a reference parser gives it.
 
 ### `parse-defender-quarantine`
 

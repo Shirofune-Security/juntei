@@ -1,7 +1,7 @@
 //! End-to-end tests: run the built binary against the test hives in `test_files/amcache/`.
 //!
 //! The expected counts are those of the `ys-amcache-parser` command, which was cross-validated
-//! against Eric Zimmerman's AmcacheParser and regipy (see `test_files/amcache/README.md`).
+//! against regipy and a second, independent Amcache parser (see `test_files/amcache/README.md`).
 
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -387,7 +387,7 @@ fn mft_csv_json_and_jsonl() {
     ]);
     assert_eq!(r.code, 0, "{}", r.stderr);
     assert!(r.stdout.contains("Results saved: "));
-    // One row per file name and per alternate data stream, as MFTECmd writes them
+    // One row per file name and per alternate data stream
     assert!(
         r.stdout
             .contains("CSV rows (file names and alternate data streams): 1,014"),
@@ -519,8 +519,6 @@ fn mft_csv_options() {
         "{}",
         help.stdout
     );
-    assert!(!help.stdout.contains("MFTECmd's --at"), "{}", help.stdout);
-    assert!(!help.stdout.contains("MFTECmd's --sn"), "{}", help.stdout);
 
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("mft.csv");
@@ -555,7 +553,7 @@ fn mft_csv_options() {
     let rows = csv(&["-s"]);
     assert_eq!(rows.len(), 1041);
     assert_eq!(rows.iter().filter(|r| r["NameType"] == "Dos").count(), 27);
-    // only records created or modified on or after the cutoff (MFTECmd gives the same 8 rows)
+    // only records created or modified on or after the cutoff (the reference gives the same 8 rows)
     let rows = csv(&["--cutoff", "2007-07-01"]);
     assert_eq!(rows.len(), 8);
     assert_eq!(rows[0]["LastModified0x10"], "2009-01-19T04:17:44.7268320Z");
@@ -612,7 +610,7 @@ fn mft_csv_reports_damaged_attributes() {
     ]);
     assert_eq!(r.code, 0, "{}", r.stdout);
     let (_, rows) = csv_rows(&out);
-    // the damaged attributes are left out and said so, as MFTECmd does
+    // the damaged attributes are left out and said so
     let names: Vec<&str> = rows.iter().map(|r| r["FileName"].as_str()).collect();
     assert_eq!(
         names,
@@ -804,7 +802,7 @@ fn mft_damaged_inputs_do_not_stop_the_run() {
         r.stdout
     );
     assert!(r.stdout.contains("Entries: 1,016"), "{}", r.stdout);
-    // the CSV's parent paths of the loop end in MFTECmd's PathUnknown
+    // the CSV's parent paths of the loop end in PathUnknown
     let out = dir.path().join("cycle.csv");
     let r = run(&[
         "parse-mft",
@@ -1180,7 +1178,7 @@ fn usn_journal_paths_are_those_of_each_records_time() {
             "OffsetToData",
             "SourceFile",
         ],
-        "MFTECmd's columns first"
+        "the common columns first"
     );
     let col = |name: &str| header.iter().position(|h| h == name).unwrap();
     let rows: Vec<csv::StringRecord> = csv.records().map(|r| r.unwrap()).collect();
@@ -1484,8 +1482,8 @@ fn wifi_profile(guid: &str, index: u32, length: i32, ssid: &[u8]) -> RegKey {
 }
 
 /// A SOFTWARE hive naming two accounts and two Wi-Fi networks, with a profile left without
-/// metadata, one whose index another profile already took (the first one names it, as in
-/// SrumECmd), and one whose `Channel Hints` is damaged. Index 0 is the `L2ProfileId` of the Windows
+/// metadata, one whose index another profile already took (the first one names it), and
+/// one whose `Channel Hints` is damaged. Index 0 is the `L2ProfileId` of the Windows
 /// 10 database's network entries.
 fn software_hive() -> Vec<u8> {
     let profile = |sid: &str, image: &str| {
@@ -1915,7 +1913,7 @@ fn lnk_summary_on_the_terminal() {
 }
 
 #[test]
-fn lnk_csv_has_lecmds_columns() {
+fn lnk_csv_has_the_common_columns() {
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("lnk.csv");
     let r = run(&[
@@ -1945,7 +1943,7 @@ fn lnk_csv_has_lecmds_columns() {
             .find(|r| r["SourceFile"].ends_with(name))
             .unwrap()
     };
-    // Directory Opus's help, from Eric Zimmerman's test set: as LECmd reads it
+    // Directory Opus's help, from a public test set: as the reference reads it
     let opus = row("opus_help.lnk");
     for (column, value) in [
         ("TargetCreated", "2015-12-25T02:42:20.167694100Z"),
@@ -2147,7 +2145,7 @@ fn jump_list_summary_on_the_terminal() {
 }
 
 #[test]
-fn jump_list_csv_has_jlecmds_columns() {
+fn jump_list_csv_has_the_common_columns() {
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("jl");
     let r = run(&[
@@ -2181,7 +2179,7 @@ fn jump_list_csv_has_jlecmds_columns() {
             .find(|r| r["SourceFile"].ends_with(file) && r["MRU"] == mru)
             .unwrap()
     };
-    // Windows 10 Explorer, from Eric Zimmerman's test set: as JLECmd reads it
+    // Windows 10 Explorer, from a public test set: as the reference reads it
     let temp = row("f01b4d95cf55d32a.automaticDestinations-ms", "0");
     for (column, value) in [
         ("AppId", "f01b4d95cf55d32a"),
@@ -2213,7 +2211,7 @@ fn jump_list_csv_has_jlecmds_columns() {
     ] {
         assert_eq!(temp[column], value, "{column}");
     }
-    // Windows 7 Explorer, a version 1 list: no interaction count is recorded, and JLECmd writes 0
+    // Windows 7 Explorer, a version 1 list: no interaction count is recorded: 0
     let videos = row("1b4dd67f29cb1962.automaticDestinations-ms", "0");
     for (column, value) in [
         ("DestListVersion", "1"),
@@ -2230,7 +2228,7 @@ fn jump_list_csv_has_jlecmds_columns() {
     }
     assert!(videos["LastModified"].starts_with("2016-01-16T20:23:24"));
     // A Windows 10 version 6 list that ends inside its last sector: entry 1 is a file staged
-    // for a CD burn, named as JLECmd names it
+    // for a CD burn, named as the reference names it
     let burn = row("5f7b5f1e01b83767.automaticDestinations-ms", "36");
     assert_eq!(burn["DestListVersion"], "6");
     assert_eq!(burn["TargetIDAbsolutePath"], r"This PC\D:\autorun.inf");
@@ -2382,7 +2380,7 @@ fn jump_list_streams_no_entry_names() {
     let entry = rows.iter().find(|r| r["EntryNumber"] == "7").unwrap();
     assert_eq!(entry["Path"], r"C:\Temp");
     assert_eq!(entry["LocalPath"], "");
-    // as JLECmd writes it with --withDir
+    // a link stream no entry names
     let unlisted = rows.iter().find(|r| r["EntryNumber"] == "99").unwrap();
     assert_eq!(unlisted["MRU"], "");
     assert_eq!(unlisted["Notes"], "Found in Directory, not DestList");
@@ -2613,7 +2611,7 @@ fn shimcache_logs_whose_entries_are_damaged_are_not_applied() {
 }
 
 #[test]
-fn shimcache_csv_has_appcompatcacheparsers_columns() {
+fn shimcache_csv_has_the_common_columns() {
     let hive = system_hive();
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("shimcache.csv");
@@ -2627,7 +2625,7 @@ fn shimcache_csv_has_appcompatcacheparsers_columns() {
     ]);
     assert_eq!(r.code, 0, "{}", r.stdout);
     let (header, rows) = csv_rows(&out);
-    let ez_columns = [
+    let common_columns = [
         "ControlSet",
         "CacheEntryPosition",
         "Path",
@@ -2637,16 +2635,14 @@ fn shimcache_csv_has_appcompatcacheparsers_columns() {
         "SourceFile",
         "FromSlack",
     ];
-    assert_eq!(&header[..8], ez_columns);
+    assert_eq!(&header[..8], common_columns);
     assert_eq!(header.len(), 20);
-    // every entry as Eric Zimmerman's AppCompatCacheParser writes it (its times to the second)
-    let (_, ez) = csv_rows(&repo(&format!(
-        "{SHIMCACHE_DIR}/AppCompatCacheParser_SYSTEM.csv"
-    )));
+    // every entry as the reference writes it (its times to the second)
+    let (_, expected) = csv_rows(&repo(&format!("{SHIMCACHE_DIR}/SYSTEM.expected.csv")));
     assert_eq!(rows.len(), 359);
-    assert_eq!(rows.len(), ez.len());
-    for (ours, theirs) in rows.iter().zip(&ez) {
-        for column in ez_columns {
+    assert_eq!(rows.len(), expected.len());
+    for (ours, theirs) in rows.iter().zip(&expected) {
+        for column in common_columns {
             let value = match column {
                 "LastModifiedTimeUTC" => {
                     ours[column].get(..19).unwrap_or_default().replace('T', " ")

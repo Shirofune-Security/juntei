@@ -1,11 +1,10 @@
-//! `parse-mft`'s CSV: the columns of Eric Zimmerman's MFTECmd for `$MFT`, computed as MFTECmd
-//! (and its MFT library) computes them, from the FILE records that ys-mft-parser reads: one row per
-//! file name of every base record (in-use records first, then free ones), and one more per
-//! alternate data stream, with the parent paths of MFTECmd's directory map, both sets of
-//! timestamps and the timestomping indicators `SI<FN`, `uSecZeros` and `Copied`.
+//! `parse-mft`'s CSV, computed from the FILE records that ys-mft-parser reads: one row per file
+//! name of every base record (in-use records first, then free ones), and one more per alternate
+//! data stream, with the parent paths of a directory map, both sets of timestamps and the
+//! timestomping indicators `SI<FN`, `uSecZeros` and `Copied`.
 //!
-//! The values come from the attributes' raw bytes, at the offsets MFTECmd reads, so that a value
-//! MFTECmd treats as no time (zero, negative or past the year 9999) is no time here too.
+//! The values come from the attributes' raw bytes, at fixed offsets; a time that is zero, negative
+//! or past the year 9999 is no time.
 
 use crate::cli::EntryRanges;
 use crate::util;
@@ -16,7 +15,7 @@ use mft::{MftEntry, MftParser};
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Read, Seek, Write};
 
-/// The columns, in MFTECmd's order and with its names.
+/// The columns, in order.
 pub const CSV_HEADER: [&str; 35] = [
     "EntryNumber",
     "SequenceNumber",
@@ -55,12 +54,13 @@ pub const CSV_HEADER: [&str; 35] = [
     "ParseErrors",
 ];
 
-/// MFTECmd's `$MFT` options.
+/// The CSV's options.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Options {
-    /// `--at`: every `$FILE_NAME` time, not only those that differ from `$STANDARD_INFORMATION`.
+    /// `--all-times`: every `$FILE_NAME` time, not only those that differ from
+    /// `$STANDARD_INFORMATION`.
     pub all_times: bool,
-    /// `--sn`: rows for DOS (8.3) names too.
+    /// `--short-names`: rows for DOS (8.3) names too.
     pub short_names: bool,
     /// `--cutoff`, as a FILETIME: only records whose `$STANDARD_INFORMATION` created or modified
     /// time is on or after it.
@@ -69,7 +69,7 @@ pub struct Options {
 
 /// An entry number and the sequence number that references to it use: a free record's is one
 /// less than its own (NTFS raises it when the record is freed), so a deleted file still finds its
-/// deleted directory. MFTECmd's record key.
+/// deleted directory.
 type Key = (u64, i32);
 
 const ROOT: Key = (5, 5);
@@ -79,7 +79,7 @@ const MAX_FILETIME: i64 = 2_650_467_743_999_999_999;
 
 const NAMESPACE_DOS: u8 = 2;
 
-/// A FILETIME, or nothing when MFTECmd would not show it as a time.
+/// A FILETIME, or nothing when it is not a time.
 fn filetime(raw: i64) -> Option<i64> {
     (raw > 0 && raw <= MAX_FILETIME).then_some(raw)
 }
@@ -163,7 +163,7 @@ struct Data {
 }
 
 impl Data {
-    /// The size MFTECmd shows: the resident content's, or the non-resident stream's.
+    /// The size shown: the resident content's, or the non-resident stream's.
     fn size(&self) -> u64 {
         match (&self.resident, self.non_resident) {
             (Some((len, _)), _) => *len,
@@ -235,7 +235,7 @@ impl Record {
                 }
             };
             // A resident value that doesn't fit in the record (or a value too short for its
-            // attribute) is a damaged attribute: MFTECmd leaves it out and says so in ParseErrors.
+            // attribute) is a damaged attribute: it is left out, and ParseErrors says so.
             let value = || match &header.residential_header {
                 ResidentialHeader::Resident(r) => r.value(raw).map_err(|_| {
                     format!(
@@ -299,7 +299,7 @@ impl Record {
         self.flags & 2 != 0
     }
 
-    /// An extension record: one that names its base record (MFTECmd needs both numbers nonzero).
+    /// An extension record: one that names its base record (both numbers nonzero).
     fn is_extension(&self) -> bool {
         self.base.0 > 0 && self.base.1 > 0
     }
@@ -327,8 +327,7 @@ impl Record {
         })
     }
 
-    /// The first name that isn't a DOS name, with its parent: what MFTECmd's directory map
-    /// keeps.
+    /// The first name that isn't a DOS name, with its parent: what the directory map keeps.
     fn first_long_name(&self) -> Option<DirName> {
         self.names()
             .find(|n| n.namespace != NAMESPACE_DOS)
@@ -352,7 +351,7 @@ fn attribute_name(t: MftAttributeType) -> &'static str {
     }
 }
 
-/// `$STANDARD_INFORMATION` at MFTECmd's offsets in the attribute record (the value starts at
+/// `$STANDARD_INFORMATION` at fixed offsets in the attribute record (the value starts at
 /// 0x18); the owner, security and USN fields only when the record is longer than 0x48 bytes.
 fn standard_info(raw: &[u8]) -> Result<Attr, String> {
     if raw.len() < 0x48 {
@@ -406,7 +405,7 @@ fn guid(b: &[u8]) -> String {
 }
 
 /// The substitute name of a symbolic link or a junction (mount point), without `\??\`: the target
-/// MFTECmd shows. Other reparse points have none.
+/// shown. Other reparse points have none.
 fn reparse_target(v: &[u8]) -> String {
     const MOUNT_POINT: u32 = 0xA000_0003;
     const SYMBOLIC_LINK: u32 = 0xA000_000C;
@@ -427,14 +426,14 @@ fn reparse_target(v: &[u8]) -> String {
         .replace(r"\??\", "")
 }
 
-/// The name of a directory in MFTECmd's directory map, and the key of its parent.
+/// The name of a directory in the directory map, and the key of its parent.
 #[derive(Clone, Debug)]
 struct DirName {
     name: String,
     parent: Key,
 }
 
-/// What MFTECmd knows of the whole MFT before it writes a row: the base records, the extension
+/// What is known of the whole MFT before a row is written: the base records, the extension
 /// records of each, and the names of the directories.
 struct Index {
     base_keys: HashSet<Key>,
@@ -513,7 +512,7 @@ impl Index {
         }
     }
 
-    /// The path of the directory `key`, as MFTECmd builds it: `.` for the root, then the names
+    /// The path of the directory `key`: `.` for the root, then the names
     /// down to the directory; a chain that doesn't reach the root (a missing directory, or a
     /// loop) starts with `.\PathUnknown\Directory with ID 0x<entry>-<sequence>`.
     fn parent_path(&self, key: Key) -> String {
@@ -532,7 +531,7 @@ impl Index {
         }
         let mut path = String::new();
         if current != ROOT {
-            // MFTECmd formats the key as two 8-digit hex numbers.
+            // The key, as two 8-digit hex numbers.
             path = format!(
                 ".\\PathUnknown\\Directory with ID 0x{:08X}-{:08X}",
                 current.0, current.1
@@ -548,7 +547,7 @@ impl Index {
     }
 }
 
-/// `$STANDARD_INFORMATION` flags as .NET writes MFTECmd's flags enum, `|` between the names;
+/// `$STANDARD_INFORMATION` flags as .NET writes a flags enum, `|` between the names;
 /// the number when a bit has no name.
 fn si_flags(value: i32) -> String {
     const NAMES: [(u32, &str); 24] = [
@@ -618,7 +617,7 @@ fn time(t: Option<i64>) -> String {
     .unwrap_or_default()
 }
 
-/// Windows-1252 text, all of it (MFTECmd decodes `Zone.Identifier` with this code page).
+/// Windows-1252 text, all of it (`Zone.Identifier` is decoded with this code page).
 fn windows_1252(bytes: &[u8]) -> String {
     const HIGH: [char; 32] = [
         '€', '\u{81}', '‚', 'ƒ', '„', '…', '†', '‡', 'ˆ', '‰', 'Š', '‹', 'Œ', '\u{8d}', 'Ž',
@@ -830,8 +829,8 @@ fn row_for(
     row(record, index, shared, name, Some(stream), source, options).0
 }
 
-/// A row's timestamps (the `0x10` ones and, where shown, the `0x30` ones) and what MFTECmd
-/// derives from them.
+/// A row's timestamps (the `0x10` ones and, where shown, the `0x30` ones) and what is derived
+/// from them.
 struct Times {
     created: Option<i64>,
     created_fn: Option<i64>,
@@ -850,10 +849,10 @@ struct Times {
 }
 
 /// `$STANDARD_INFORMATION`'s times, and `$FILE_NAME`'s where they differ (all of them with
-/// `--at`); the timestomping indicators: `SI<FN` (`$STANDARD_INFORMATION` created before a
+/// `--all-times`); the timestomping indicators: `SI<FN` (`$STANDARD_INFORMATION` created before a
 /// different `$FILE_NAME` created), `uSecZeros` (created or modified on a whole millisecond) and
 /// `Copied` (modified before created). Without `$STANDARD_INFORMATION`, `$FILE_NAME`'s times go
-/// where MFTECmd puts them: created in `Created0x30`, the others in the `0x10` columns.
+/// to `Created0x30` (created) and to the `0x10` columns (the others).
 fn times(si: Option<&StandardInfo>, name: &FileName, all: bool) -> Times {
     let Some(si) = si else {
         return Times {
@@ -1081,7 +1080,7 @@ mod tests {
             index.parent_path((77, 1)),
             r".\PathUnknown\Directory with ID 0x0000004D-00000001"
         );
-        // a loop: a, its parent b, then a again (MFTECmd's stack gives the names in that order)
+        // a loop: a, its parent b, then a again (a stack gives the names in that order)
         assert_eq!(
             index.parent_path((50, 1)),
             r".\PathUnknown\Directory with ID 0x00000032-00000001\b\a"

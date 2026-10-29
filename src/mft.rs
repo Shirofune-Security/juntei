@@ -89,7 +89,7 @@ pub fn run(opts: &MftOptions) -> i32 {
         return 1;
     }
 
-    // Check every header first: the progress bar counts entries. The CSV (MFTECmd's columns)
+    // Check every header first: the progress bar counts entries. The CSV
     // reads every entry twice more: once for the directories, once for the rows.
     let csv_passes =
         if opts.output_type() == MftOutputType::Csv && (opts.output.is_some() || data_on_stdout) {
@@ -316,10 +316,10 @@ fn parse_one(
         }
     }
     if let Some(EntryWriter::Csv(w)) = writer {
-        stats.csv_rows += crate::mftecmd::write(
+        stats.csv_rows += crate::mft_csv::write(
             &mut parser,
             &path.to_string_lossy(),
-            opts.mftecmd(),
+            opts.csv_options(),
             opts.ranges.as_ref(),
             w,
             bar,
@@ -339,7 +339,7 @@ fn parse_one(
 
 /// The CSV / JSON / JSONL writer of one output.
 enum EntryWriter {
-    /// MFTECmd's columns, written after the entries are read (see [`crate::mftecmd`]).
+    /// The CSV, written after the entries are read (see [`crate::mft_csv`]).
     Csv(Box<csv::Writer<Box<dyn Write>>>),
     YsMftParserCsv(Box<csv::Writer<Box<dyn Write>>>),
     Json(Box<dyn Write>),
@@ -351,7 +351,7 @@ impl EntryWriter {
         Ok(match output_type {
             MftOutputType::Csv => {
                 let mut csv = csv::Writer::from_writer(w);
-                csv.write_record(crate::mftecmd::CSV_HEADER)
+                csv.write_record(crate::mft_csv::CSV_HEADER)
                     .map_err(io::Error::other)?;
                 EntryWriter::Csv(Box::new(csv))
             }
@@ -474,7 +474,7 @@ fn safe_file_name(s: &str, max: usize) -> String {
 /// Counts for the results summary.
 #[derive(Default)]
 struct Stats {
-    /// Rows of the CSV (MFTECmd's columns): one per file name and per alternate data stream.
+    /// Rows of the CSV: one per file name and per alternate data stream.
     csv_rows: u64,
     files_parsed: usize,
     files_failed: usize,

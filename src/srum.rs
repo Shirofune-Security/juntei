@@ -1,6 +1,6 @@
 //! `parse-srum`: Windows System Resource Usage Monitor (`SRUDB.dat`) parsing with Yamato
 //! Security's ys-srum-parser (a fork of Sootmark's ese and srum crates): every entry of every
-//! provider table, with its program, account and network named the way SrumECmd names them, as
+//! provider table, with its program, account and network named, as
 //! one CSV table per provider or one JSON object per entry. The volume's SOFTWARE hive, given or
 //! found in the same collection, names the accounts and Wi-Fi networks. Hayabusa's input options,
 //! progress bar and results summary around it.
@@ -243,7 +243,7 @@ pub fn run(opts: &SrumOptions) -> i32 {
 
 // --- SOFTWARE hive ------------------------------------------------------------------------------
 
-/// The names the SOFTWARE hive gives what SRUM only numbers, read as SrumECmd reads them:
+/// The names the SOFTWARE hive gives what SRUM only numbers, read from the hive:
 /// account names (the last component of each `ProfileList` profile's `ProfileImagePath`) and
 /// Wi-Fi network names (each `WlanSvc` profile's `ProfileIndex`, with the SSID in its
 /// `MetaData\Channel Hints`; the first profile with an index wins). A profile that can't be read
@@ -382,14 +382,14 @@ fn child(dir: &Path, name: &str) -> Option<PathBuf> {
 
 // --- entries as rows ----------------------------------------------------------------------------
 
-/// The CSV file / provider an entry belongs to: SrumECmd's name for the known tables (the two
+/// The CSV file / provider an entry belongs to: a name for each known table (the two
 /// energy usage tables share `EnergyUsage`), the table's own name for the others.
 fn output_name(e: &Entry) -> String {
     e.kind
         .map_or_else(|| e.table.clone(), |k| k.output_name().to_string())
 }
 
-/// An entry's columns, in order: SrumECmd's (`Id`, `Timestamp`, the program, the account, the
+/// An entry's columns, in order: the common ones (`Id`, `Timestamp`, the program, the account, the
 /// raw ids), then the table's own. FILETIME columns become times; the network tables get
 /// `InterfaceType` after `InterfaceLuid` and `ProfileName` after `L2ProfileId`; the energy
 /// usage tables get `IsLt` (the long-term table).
@@ -522,7 +522,7 @@ impl Serialize for Ordered<'_> {
 
 // --- writers ------------------------------------------------------------------------------------
 
-/// One CSV file per provider in `dir` (SrumECmd's names: `NetworkUsages.csv`,
+/// One CSV file per provider in `dir` (`NetworkUsages.csv`,
 /// `AppResourceUseInfo.csv`, …), with the columns of every entry it holds, and
 /// `SruDbIdMapTable.csv`; returns the number of files written.
 fn write_csv_tables(dir: &Path, srum: &Srum) -> io::Result<usize> {
