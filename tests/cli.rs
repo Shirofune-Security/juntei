@@ -509,6 +509,19 @@ fn mft_csv_json_and_jsonl() {
 
 #[test]
 fn mft_csv_options() {
+    let help = run(&["parse-mft", "-h", "-K"]);
+    assert_eq!(help.code, 0, "{}", help.stderr);
+    assert!(help.stdout.contains("-a, --all-times"), "{}", help.stdout);
+    assert!(help.stdout.contains("-s, --short-names"), "{}", help.stdout);
+    assert!(
+        help.stdout
+            .contains("Output type: csv (default), ys-mft-parser-csv, json, jsonl"),
+        "{}",
+        help.stdout
+    );
+    assert!(!help.stdout.contains("MFTECmd's --at"), "{}", help.stdout);
+    assert!(!help.stdout.contains("MFTECmd's --sn"), "{}", help.stdout);
+
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("mft.csv");
     let csv = |extra: &[&str]| {
@@ -526,7 +539,7 @@ fn mft_csv_options() {
         assert_eq!(r.code, 0, "{}", r.stdout);
         csv_rows(&out).1
     };
-    // $FILE_NAME times only where they differ from $STANDARD_INFORMATION, unless --all-times
+    // $FILE_NAME times only where they differ from $STANDARD_INFORMATION, unless -a/--all-times
     let mft = |rows: &[std::collections::HashMap<String, String>]| {
         rows.iter()
             .find(|r| r["FileName"] == "$MFT")
@@ -535,11 +548,11 @@ fn mft_csv_options() {
     };
     assert_eq!(mft(&csv(&[]))["Created0x30"], "");
     assert_eq!(
-        mft(&csv(&["--all-times"]))["Created0x30"],
+        mft(&csv(&["-a"]))["Created0x30"],
         "2007-06-30T12:50:52.2523952Z"
     );
-    // DOS (8.3) names get rows of their own with --short-names
-    let rows = csv(&["--short-names"]);
+    // DOS (8.3) names get rows of their own with -s/--short-names
+    let rows = csv(&["-s"]);
     assert_eq!(rows.len(), 1041);
     assert_eq!(rows.iter().filter(|r| r["NameType"] == "Dos").count(), 27);
     // only records created or modified on or after the cutoff (MFTECmd gives the same 8 rows)

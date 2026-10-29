@@ -1,6 +1,6 @@
 [package]
 name = "juntei"
-version = "0.1.0"
+version = "1.0.0"
 repository = "https://github.com/Yamato-Security/juntei"
 authors = ["Yamato Security @SecurityYamato"]
 description = "Windows forensics artifact parser"

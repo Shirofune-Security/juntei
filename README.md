@@ -120,13 +120,13 @@ Filtering:
 
 Output:
   -o, --output <PATH>                   Save every entry to a file (with -d: a directory with one file per $MFT)
-  -t, --output-type <TYPE>              Output type: csv (default, MFTECmd's columns), ys-mft-parser-csv, json, jsonl. Without -o, the entries are written to stdout
+  -t, --output-type <TYPE>              Output type: csv (default), ys-mft-parser-csv, json, jsonl. Without -o, the entries are written to stdout
   -e, --extract-resident-streams <DIR>  Write the resident $DATA streams (the content of small files and alternate data streams) to files in DIR
   -C, --clobber                         Overwrite files when saving
 
 CSV Output:
-      --all-times      Write every $FILE_NAME time, not only those that differ from $STANDARD_INFORMATION (MFTECmd's --at)
-      --short-names    Write rows for DOS (8.3) names too (MFTECmd's --sn)
+  -a, --all-times      Write every $FILE_NAME time, not only those that differ from $STANDARD_INFORMATION
+  -s, --short-names    Write rows for DOS (8.3) names too
       --cutoff <DATE>  Only records whose $STANDARD_INFORMATION created or modified time is on or after DATE, in UTC unless an offset is given (ex: 2025-10-19, 2025-10-19T13:45:30Z)
 
 Display Settings:
