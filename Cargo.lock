@@ -1270,7 +1270,7 @@ dependencies = [
 [[package]]
 name = "ys-shimcache-parser"
 version = "1.0.0"
-source = "git+https://github.com/Yamato-Security/ys-shimcache-parser#2a46493ce47519cc608fedd4a85368f46aac2bf6"
+source = "git+https://github.com/Yamato-Security/ys-shimcache-parser?branch=ys%2Fselect-and-value-size#360534fd8b656c91f7862067d8f271396571f2ab"
 dependencies = [
  "forensicnomicon",
  "ys-shimcache-parser-core",
@@ -1279,7 +1279,7 @@ dependencies = [
 [[package]]
 name = "ys-shimcache-parser-core"
 version = "1.0.0"
-source = "git+https://github.com/Yamato-Security/ys-shimcache-parser#2a46493ce47519cc608fedd4a85368f46aac2bf6"
+source = "git+https://github.com/Yamato-Security/ys-shimcache-parser?branch=ys%2Fselect-and-value-size#360534fd8b656c91f7862067d8f271396571f2ab"
 
 [[package]]
 name = "ys-srum-parser"

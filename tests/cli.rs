@@ -2656,7 +2656,7 @@ fn shimcache_csv_has_the_common_columns() {
         "FromSlack",
     ];
     assert_eq!(&header[..8], common_columns);
-    assert_eq!(header.len(), 20);
+    assert_eq!(header.len(), 28);
     // every entry as the reference writes it (its times to the second)
     let (_, expected) = csv_rows(&repo(&format!("{SHIMCACHE_DIR}/SYSTEM.expected.csv")));
     assert_eq!(rows.len(), 359);
@@ -2685,6 +2685,18 @@ fn shimcache_csv_has_the_common_columns() {
         ("Machine", "x64"),
         ("InsertFlags", ""),
         ("Findings", ""),
+        (
+            "RegistryPath",
+            r"ControlSet001\Control\Session Manager\AppCompatCache",
+        ),
+        ("RegistryValueName", "AppCompatCache"),
+        // the whole cache, not the entry's data
+        ("CacheValueSize", "80260"),
+        ("IsCurrent", "True"),
+        ("SelectCurrent", "1"),
+        ("SelectDefault", "1"),
+        ("SelectLastKnownGood", "1"),
+        ("SelectFailed", "0"),
     ] {
         assert_eq!(first[column], value, "{column}");
     }
@@ -2693,6 +2705,83 @@ fn shimcache_csv_has_the_common_columns() {
         .filter(|r| r["Findings"] == "SHIMCACHE-SUSPICIOUS-PATH")
         .collect();
     assert_eq!(flagged.len(), 27);
+}
+
+/// regipy's 32-bit Windows 7 SYSTEM hive: two control sets, `Select\Current` 1 and
+/// `LastKnownGood` 2.
+fn regipy_hive() -> tempfile::TempDir {
+    use std::io::Read as _;
+    let dir = tempfile::tempdir().unwrap();
+    let gz = std::fs::File::open(repo(&format!("{SHIMCACHE_DIR}/regipy/SYSTEM.gz"))).unwrap();
+    let mut bytes = Vec::new();
+    flate2::read::GzDecoder::new(gz)
+        .read_to_end(&mut bytes)
+        .unwrap();
+    std::fs::write(dir.path().join("SYSTEM"), bytes).unwrap();
+    dir
+}
+
+#[test]
+fn shimcache_select_and_the_size_of_each_value() {
+    let hive = regipy_hive();
+    let system = hive.path().join("SYSTEM");
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("shimcache.csv");
+    let r = run(&[
+        "parse-shimcache",
+        "-f",
+        system.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "-K",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stdout);
+    assert!(!r.stdout.contains("Select missing"), "{}", r.stdout);
+    let (_, rows) = csv_rows(&out);
+    assert_eq!(rows.len(), 660);
+    // only Current's control set is current, not LastKnownGood's
+    for (set, current) in [("1", "True"), ("2", "False")] {
+        let of_set: Vec<_> = rows.iter().filter(|r| r["ControlSet"] == set).collect();
+        assert_eq!(of_set.len(), 330, "{set}");
+        for row in of_set {
+            assert_eq!(row["IsCurrent"], current, "{set}");
+            assert_eq!(row["CacheValueSize"], "56256", "{set}");
+            assert_eq!(
+                row["RegistryPath"],
+                format!(r"ControlSet00{set}\Control\Session Manager\AppCompatCache")
+            );
+            assert_eq!(row["SelectCurrent"], "1");
+            assert_eq!(row["SelectLastKnownGood"], "2");
+        }
+    }
+    // the same in JSON Lines
+    let r = run(&[
+        "parse-shimcache",
+        "-f",
+        system.to_str().unwrap(),
+        "-t",
+        "jsonl",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let entries: Vec<Value> = r
+        .stdout
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let second = entries.iter().find(|e| e["control_set"] == 2).unwrap();
+    assert_eq!(second["is_current"], false);
+    assert_eq!(second["cache_value_size"], 56_256);
+    assert!(second["data_size"].as_u64().unwrap() < 56_256);
+    assert_eq!(second["registry_value_name"], "AppCompatCache");
+    assert_eq!(
+        (
+            second["select_current"].as_u64(),
+            second["select_default"].as_u64(),
+            second["select_last_known_good"].as_u64(),
+            second["select_failed"].as_u64()
+        ),
+        (Some(1), Some(1), Some(2), Some(0))
+    );
 }
 
 #[test]
@@ -2721,6 +2810,11 @@ fn shimcache_values_as_json() {
     assert_eq!(xp["last_modified"], "2008-04-14T12:00:00Z");
     assert_eq!(xp["executed"], Value::Null);
     assert_eq!(xp["file_size"], 13824);
+    // a value on its own: its size is the file's, and no control set is known to be current
+    assert_eq!(xp["cache_value_size"], 53_392);
+    assert_eq!(xp["is_current"], Value::Null);
+    assert_eq!(xp["registry_path"], Value::Null);
+    assert_eq!(xp["select_current"], Value::Null);
     assert_eq!(xp["last_update"], "2016-01-13T22:20:03.265625Z");
 
     for (file, count, executed, format, path) in [

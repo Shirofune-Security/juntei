@@ -15,8 +15,8 @@ use forensicnomicon::report::Observation;
 use indicatif::ProgressBar;
 use serde_json::{Value, json};
 use shimcache_forensic::{
-    ControlSetCache, PackageRecord, Recovery, Row, ShimcacheAnomaly, ShimcacheEntry, SystemCaches,
-    audit, decode, find_logs, read_system,
+    ControlSetCache, PackageRecord, Recovery, Row, Select, ShimcacheAnomaly, ShimcacheEntry,
+    SystemCaches, audit, decode, find_logs, read_system,
 };
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -27,6 +27,8 @@ use std::path::{Path, PathBuf};
 const MAX_PRINTED_ERRORS: usize = 20;
 /// Findings listed in the summary.
 const MAX_PRINTED_FINDINGS: usize = 10;
+/// The value that holds the cache, in every format.
+const CACHE_VALUE: &str = "AppCompatCache";
 /// Larger files are not registry hives (Windows limits a hive to 2 GiB).
 const MAX_HIVE_SIZE: u64 = 2 * 1024 * 1024 * 1024 + 4096;
 
@@ -222,11 +224,13 @@ fn parse_file(path: &Path, no_logs: bool) -> Result<Parsed, String> {
         caches: SystemCaches {
             recovery: Recovery::default(),
             current_control_set: None,
+            select: Select::default(),
             is_32bit: None,
             control_sets: vec![ControlSetCache {
                 control_set: 0,
                 key_path: String::new(),
                 key_last_written: 0,
+                value_size: Some(data.len()),
                 cache: Some(cache),
                 error: None,
                 slack: Vec::new(),
@@ -255,6 +259,23 @@ impl Record<'_> {
 
     fn format(&self) -> &'static str {
         self.set.cache.as_ref().map_or("", |c| c.format.name())
+    }
+
+    /// Whether the entry's control set is the one in use (`Select\Current`); `None` when that
+    /// isn't known, or for a value file.
+    fn is_current(&self) -> Option<bool> {
+        let current = self.file.caches.select.current?;
+        self.control_set().map(|n| n == current)
+    }
+
+    /// The `Select` values, unless the entry comes from a value file.
+    fn select(&self) -> Option<&Select> {
+        (!self.file.is_value).then_some(&self.file.caches.select)
+    }
+
+    /// The cache key's path and the value's name, unless the entry comes from a value file.
+    fn registry(&self) -> Option<(&str, &str)> {
+        (!self.file.is_value).then_some((self.set.key_path.as_str(), CACHE_VALUE))
     }
 }
 
@@ -337,12 +358,23 @@ const CSV_HEADER: &[&str] = &[
     "PackageVersion",
     "PackagePublisherId",
     "Findings",
+    "RegistryPath",
+    "RegistryValueName",
+    "CacheValueSize",
+    "IsCurrent",
+    "SelectCurrent",
+    "SelectDefault",
+    "SelectLastKnownGood",
+    "SelectFailed",
 ];
 
 fn csv_row(r: &Record) -> Vec<String> {
     let e = r.entry();
     let package = e.package_record();
     let bool_text = |b: bool| if b { "True" } else { "False" }.to_owned();
+    let number = |n: Option<u32>| n.map_or_else(String::new, |n| n.to_string());
+    let select = r.select();
+    let (registry_path, registry_value) = r.registry().unwrap_or_default();
     vec![
         r.control_set().map_or_else(String::new, |n| n.to_string()),
         e.position.to_string(),
@@ -371,6 +403,14 @@ fn csv_row(r: &Record) -> Vec<String> {
             .as_ref()
             .map_or_else(String::new, |p| p.publisher_id.to_owned()),
         finding_codes(&r.findings),
+        registry_path.to_owned(),
+        registry_value.to_owned(),
+        r.set.value_size.map_or_else(String::new, |n| n.to_string()),
+        r.is_current().map_or_else(String::new, bool_text),
+        number(select.and_then(|s| s.current)),
+        number(select.and_then(|s| s.default)),
+        number(select.and_then(|s| s.last_known_good)),
+        number(select.and_then(|s| s.failed)),
     ]
 }
 
@@ -404,9 +444,18 @@ fn json_record(r: &Record) -> Value {
             "flags": p.flags,
         })
     });
+    let select = r.select();
     json!({
         "source_file": r.file.source,
         "control_set": r.control_set(),
+        "is_current": r.is_current(),
+        "registry_path": r.registry().map(|(path, _)| path),
+        "registry_value_name": r.registry().map(|(_, name)| name),
+        "cache_value_size": r.set.value_size,
+        "select_current": select.and_then(|s| s.current),
+        "select_default": select.and_then(|s| s.default),
+        "select_last_known_good": select.and_then(|s| s.last_known_good),
+        "select_failed": select.and_then(|s| s.failed),
         "cache_format": r.format(),
         "cache_last_written": time(Some(r.set.key_last_written).filter(|&t| t != 0)),
         "position": e.position,
@@ -498,6 +547,24 @@ fn print_summary(parsed: &[Parsed], failed: usize, no_color: bool) {
         );
         for f in dirty.iter().take(MAX_PRINTED_FINDINGS) {
             p(None, &format!("  {}", f.source), true);
+        }
+    }
+    let unselected: Vec<&Parsed> = parsed
+        .iter()
+        .filter(|f| !f.caches.select.problems.is_empty())
+        .collect();
+    if !unselected.is_empty() {
+        p_label(
+            no_color,
+            "SYSTEM\\Select missing or malformed (current control set unknown): ",
+            &fmt_num(unselected.len()),
+        );
+        for f in unselected.iter().take(MAX_PRINTED_FINDINGS) {
+            p(
+                None,
+                &format!("  {}: {}", f.source, f.caches.select.problems.join("; ")),
+                true,
+            );
         }
     }
     let mut formats: BTreeMap<&str, usize> = BTreeMap::new();

@@ -568,8 +568,13 @@ juntei parse-shimcache -f SYSTEM -t jsonl | jq .
   format has no flag: Windows XP and 32-bit Vista), and then `CacheFormat`, `CacheLastWrittenUTC`
   (when Windows last saved the cache), `InsertFlags`, `ShimFlags`, `DataSize`, `Machine` (x64, x86,
   ARM64; Windows 10 and 11), `FileSize` and `LastUpdateTimeUTC` (Windows XP), a packaged app's
-  `PackageName`, `PackageVersion` and `PackagePublisherId`, and `Findings`. Times are UTC (RFC
-  3339). JSON / JSONL have one object per entry with every field, its data and the records in it.
+  `PackageName`, `PackageVersion` and `PackagePublisherId`, and `Findings`, then where the cache was
+  read from: `RegistryPath`, `RegistryValueName` and `CacheValueSize` (the whole cache value, not an
+  entry's `DataSize`), and the control sets `SYSTEM\Select` names: `IsCurrent` (the entry's control
+  set is `Select\Current`; empty when that isn't known), `SelectCurrent`, `SelectDefault`,
+  `SelectLastKnownGood` and `SelectFailed`. A missing or malformed `Select` is reported in the
+  summary, and `IsCurrent` is left empty rather than guessed. Times are UTC (RFC 3339). JSON / JSONL
+  have one object per entry with every field, its data and the records in it.
 - `-f` also takes an AppCompatCache value on its own (its bytes, exported from the registry or
   carved), read without a control set.
 - Findings on the terminal: Windows system binaries recorded outside `System32` / `SysWOW64`
