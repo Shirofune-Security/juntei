@@ -948,7 +948,7 @@ checksum = "16039a30e3d12a335537236722ba00a8da0b5dfdfcf20785b75dea78f523160e"
 [[package]]
 name = "sootmark-defender"
 version = "0.3.0"
-source = "git+https://github.com/Yamato-Security/ys-defender-history-parser?rev=f48d970c430e27fc64102dfef73ac4990c778b21#f48d970c430e27fc64102dfef73ac4990c778b21"
+source = "git+https://github.com/Yamato-Security/ys-defender-history-parser?rev=599ab7ab15444aecf61efcd1c1402a151df944b9#599ab7ab15444aecf61efcd1c1402a151df944b9"
 dependencies = [
  "sootmark-common",
 ]
