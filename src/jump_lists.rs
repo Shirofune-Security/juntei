@@ -4,7 +4,7 @@
 //! application opened: each entry's last use, interaction count, pin, the machine and tracker
 //! identifiers of the target, its path and its link. A custom jump list
 //! (`*.customDestinations-ms`) is the application's own menu: its categories, tasks and links.
-//! Written as Eric Zimmerman's JLECmd's two CSV tables and more, or every field as JSON / JSONL,
+//! Written as two CSV tables, or every field as JSON / JSONL,
 //! with Hayabusa's input options, progress bar and results summary. The summary flags links left
 //! over from an earlier version of a custom list, streams no `DestList` entry names, items staged
 //! for a CD or DVD burn, and shells or script hosts started with arguments.
@@ -38,7 +38,7 @@ const MAX_PRINTED_APPS: usize = 5;
 const MAX_JUMP_LIST_SIZE: u64 = 256 * 1024 * 1024;
 const AUTOMATIC_SUFFIX: &str = ".automaticdestinations-ms";
 const CUSTOM_SUFFIX: &str = ".customdestinations-ms";
-/// JLECmd's note on a link stream no `DestList` entry names.
+/// The note on a link stream no `DestList` entry names.
 const UNLISTED_NOTE: &str = "Found in Directory, not DestList";
 
 /// Run the command; returns the exit status.
@@ -306,9 +306,8 @@ fn parse_data(name: &str, data: &[u8], options: &jumplist::Options) -> Result<Ju
     Ok(JumpList::Custom(list))
 }
 
-/// JLECmd's link columns (`TargetCreated` … `Arguments`), the target path given as JLECmd gives
-/// it: an automatic list's link without target items is named by its local path or network
-/// share and common path.
+/// The common link columns (`TargetCreated` … `Arguments`): an automatic list's link without
+/// target items is named by its local path or network share and common path.
 fn link_columns(l: Option<&Link>, automatic: bool) -> Vec<String> {
     let Some(l) = l else {
         return vec![String::new(); LINK_COLUMNS.len()];
@@ -350,7 +349,7 @@ fn link_columns(l: Option<&Link>, automatic: bool) -> Vec<String> {
     ]
 }
 
-/// The link columns after JLECmd's.
+/// The link columns after the common ones.
 fn extra_link_columns(l: Option<&Link>) -> Vec<String> {
     l.map_or_else(
         || vec![String::new(); 4],
@@ -389,7 +388,7 @@ const LINK_COLUMNS: &[&str] = &[
     "Arguments",
 ];
 
-/// JLECmd's columns of `AutomaticDestinations.csv` before the link's.
+/// The columns of `AutomaticDestinations.csv` before the link's.
 const AUTOMATIC_COLUMNS: &[&str] = &[
     "SourceFile",
     "SourceCreated",
@@ -415,7 +414,7 @@ const AUTOMATIC_COLUMNS: &[&str] = &[
     "VolumeDroid",
 ];
 
-/// JLECmd's columns of `CustomDestinations.csv` before the link's.
+/// The columns of `CustomDestinations.csv` before the link's.
 const CUSTOM_COLUMNS: &[&str] = &[
     "SourceFile",
     "SourceCreated",
@@ -426,7 +425,7 @@ const CUSTOM_COLUMNS: &[&str] = &[
     "EntryName",
 ];
 
-/// After the link's columns: JLECmd's last automatic column, then those it doesn't write.
+/// After the link's columns: the last common automatic column, then the rest.
 const AUTOMATIC_EXTRA: &[&str] = &[
     "Notes",
     "DisplayPath",
@@ -478,7 +477,7 @@ fn automatic_rows(r: &Parsed, a: &Automatic) -> Vec<Vec<String>> {
             d.hostname.clone(),
             d.mac.clone(),
             d.path.clone(),
-            // Version 1 lists (Windows 7, 8) don't record it: 0, as JLECmd writes it.
+            // Version 1 lists (Windows 7, 8) don't record it: 0.
             d.interaction_count.unwrap_or(0).to_string(),
             if d.pin.is_some() { "True" } else { "False" }.to_owned(),
             droid(&d.file_birth_droid),
@@ -495,7 +494,7 @@ fn automatic_rows(r: &Parsed, a: &Automatic) -> Vec<Vec<String>> {
         row.extend(extra_link_columns(d.link.as_ref()));
         rows.push(row);
     }
-    // Streams no entry names, as JLECmd writes them with --withDir.
+    // Streams no entry names.
     for u in &a.unlisted {
         let mut row = source_columns(r);
         list_columns(&mut row);
@@ -533,7 +532,7 @@ fn custom_rows(r: &Parsed, c: &Custom) -> Vec<Vec<String>> {
     rows
 }
 
-/// JLECmd's `AutomaticDestinations.csv` and `CustomDestinations.csv` in `dir`.
+/// `AutomaticDestinations.csv` and `CustomDestinations.csv` in `dir`.
 fn write_csv_tables(dir: &Path, parsed: &[Parsed]) -> io::Result<()> {
     std::fs::create_dir_all(dir)?;
     let mut automatic = csv::Writer::from_path(dir.join("AutomaticDestinations.csv"))?;

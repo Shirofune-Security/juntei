@@ -8,7 +8,7 @@ mod hive;
 mod jump_lists;
 mod lnk;
 mod mft;
-mod mftecmd;
+mod mft_csv;
 mod prefetch;
 mod progress;
 mod shimcache;

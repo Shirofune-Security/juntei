@@ -9,4 +9,4 @@ Both hives come from [DFIRArtifactMuseum](https://github.com/AndrewRathbun/DFIRA
 | `amcache_2012r2_old.hve` | `Win2012R2/StolenSzechuan/Amcache.hve` | legacy (`Root\File`) | 136 file entries, 0 device entries, 2 findings (medium) |
 
 The counts match the `ys-amcache-parser` command (upstream's `amcache4n6`), which was
-cross-validated against Eric Zimmerman's AmcacheParser and regipy.
+cross-validated against regipy and a second, independent Amcache parser.

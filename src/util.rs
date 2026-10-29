@@ -127,9 +127,8 @@ pub fn check_output(out: &Path, is_dir: bool, clobber: bool) -> Result<(), Strin
     Ok(())
 }
 
-/// The extension of a file name, with its dot (`.dll`), as Eric Zimmerman's tools give it (.NET's
-/// `Path.GetExtension`: from the last dot, the whole name when it starts with one, nothing when
-/// the dot is last).
+/// The extension of a file name, with its dot (`.dll`), as .NET's `Path.GetExtension` gives it:
+/// from the last dot, the whole name when it starts with one, nothing when the dot is last.
 pub fn dotnet_extension(name: &str) -> &str {
     match name.rfind('.') {
         Some(at) if at + 1 < name.len() => &name[at..],

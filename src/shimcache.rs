@@ -1,8 +1,8 @@
 //! `parse-shimcache`: the ShimCache (AppCompatCache) of `SYSTEM` hives with Yamato Security's
 //! ys-shimcache-parser (a fork of shimcache-forensic that reads every format from Windows XP to
-//! 11 as Eric Zimmerman's AppCompatCacheParser reads it): the hive's transaction logs replayed
+//! 11): the hive's transaction logs replayed
 //! when it is dirty, every control set's cache and the entries left in the slack of its value,
-//! one record per entry with AppCompatCacheParser's CSV columns and more, or every field as JSON /
+//! one record per entry as CSV columns, or every field as JSON /
 //! JSONL, with Hayabusa's input options, progress bar and results summary. The summary flags
 //! system binaries outside `System32` and executables in staging directories.
 
@@ -258,8 +258,7 @@ impl Record<'_> {
     }
 }
 
-/// Every entry of every file: each control set's cache, then its slack (AppCompatCacheParser's
-/// order).
+/// Every entry of every file: each control set's cache, then its slack.
 fn records(parsed: &[Parsed]) -> Vec<Record<'_>> {
     let mut out = Vec::new();
     for file in parsed {
@@ -316,7 +315,7 @@ fn finding_codes(findings: &[ShimcacheAnomaly]) -> String {
         .join("|")
 }
 
-/// AppCompatCacheParser's columns, in its order, then the fields it doesn't write.
+/// The CSV's columns, in order: the common ShimCache columns, then the rest.
 const CSV_HEADER: &[&str] = &[
     "ControlSet",
     "CacheEntryPosition",

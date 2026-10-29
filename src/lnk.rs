@@ -2,7 +2,7 @@
 //! sootmark-shell that reads every part of a link and does not crash on damaged ones): one record
 //! per link with what it points at (the target's times, size and attributes when the link was
 //! saved, its path, volume and network share), its arguments, the machine it was made on, and
-//! every extra data block, as LECmd's CSV columns and more, or every field as JSON / JSONL, with
+//! every extra data block, as CSV columns, or every field as JSON / JSONL, with
 //! Hayabusa's input options, progress bar and results summary. The summary flags links that
 //! hide their command line, carry data after their end, or start a shell or script host with
 //! arguments.
@@ -303,7 +303,7 @@ fn parse_file(path: &Path, options: &lnk::Options) -> Result<Parsed, String> {
 }
 
 /// The largest FILETIME that is a time: 9999-12-31 23:59:59.9999999 UTC (as in `parse-mft`'s
-/// MFTECmd columns, and .NET's limit).
+/// CSV, and .NET's limit).
 const MAX_FILETIME: u64 = 2_650_467_743_999_999_999;
 
 /// A FILETIME as an RFC 3339 UTC time, like the other commands' timestamps; empty when 0 or past
@@ -374,7 +374,7 @@ pub(crate) fn show_command(link: &Link) -> String {
         .map_or_else(|| link.show_command.to_string(), str::to_owned)
 }
 
-/// A GUID as LECmd writes droids: lower case, no braces.
+/// A GUID as droids are written: lower case, no braces.
 pub(crate) fn droid(guid: &str) -> String {
     guid.trim_matches(['{', '}']).to_ascii_lowercase()
 }
@@ -416,7 +416,7 @@ pub(crate) fn network_provider(link: &Link) -> String {
     })
 }
 
-/// LECmd's columns, in its order (MACVendor left out), then the fields LECmd doesn't write.
+/// The CSV's columns, in order: the common shortcut columns (no `MACVendor`), then the rest.
 const CSV_HEADER: &[&str] = &[
     "SourceFile",
     "SourceCreated",

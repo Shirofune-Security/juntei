@@ -1,7 +1,7 @@
 //! `parse-usn-journal`: NTFS USN change journal ($UsnJrnl:$J) parsing with Yamato Security's
 //! ys-usn-journal-parser (a fork of sootmark-usn): every record with the path its directory had
 //! when the record was written (the journal rewound, seeded from the volume's $MFT when one is
-//! found), as MFTECmd's CSV columns or every field as JSON / JSONL. `--carve` finds records in
+//! found), as CSV columns or every field as JSON / JSONL. `--carve` finds records in
 //! disk images and other data that is not a journal. Hayabusa's input options, progress bar and
 //! results summary around it.
 
@@ -349,7 +349,7 @@ fn filetime(record_time: usn::Filetime) -> String {
     .unwrap_or_default()
 }
 
-/// Flag names joined with `|`, then any unnamed bits in hex (MFTECmd's style).
+/// Flag names joined with `|`, then any unnamed bits in hex.
 fn flag_names<'a>(names: impl Iterator<Item = &'a str>, unknown: u32) -> String {
     let mut out: Vec<String> = names.map(str::to_string).collect();
     if unknown != 0 {
@@ -478,7 +478,7 @@ impl RecordWriter {
         }
     }
 
-    /// A range-tracking (V4) record: JSON and JSONL only, like MFTECmd's CSV leaves them out.
+    /// A range-tracking (V4) record: JSON and JSONL only; the CSV leaves them out.
     fn ranges(&mut self, r: &RangeRecord, source: &str) -> io::Result<()> {
         if let RecordWriter::Csv(_) = self {
             return Ok(());

@@ -214,7 +214,7 @@ impl AmcacheOptions {
 /// What `parse-mft` writes.
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MftOutputType {
-    /// One row per file name and per alternate data stream (the columns of MFTECmd)
+    /// One row per file name and per alternate data stream
     Csv,
     /// One row per entry (the columns of ys-mft-parser, upstream's mft_dump)
     #[value(alias = "mft-dump-csv")]
@@ -314,7 +314,7 @@ pub struct MftOptions {
     pub short_names: bool,
 
     /// Only records whose $STANDARD_INFORMATION created or modified time is on or after DATE, in UTC unless an offset is given (ex: 2025-10-19, 2025-10-19T13:45:30Z)
-    #[arg(help_heading = Some("CSV Output"), long, value_name = "DATE", value_parser = crate::mftecmd::parse_cutoff, display_order = 402)]
+    #[arg(help_heading = Some("CSV Output"), long, value_name = "DATE", value_parser = crate::mft_csv::parse_cutoff, display_order = 402)]
     pub cutoff: Option<i64>,
 
     #[clap(flatten)]
@@ -322,16 +322,16 @@ pub struct MftOptions {
 }
 
 impl MftOptions {
-    /// The options of the MFTECmd CSV.
-    pub fn mftecmd(&self) -> crate::mftecmd::Options {
-        crate::mftecmd::Options {
+    /// The options of the CSV.
+    pub fn csv_options(&self) -> crate::mft_csv::Options {
+        crate::mft_csv::Options {
             all_times: self.all_times,
             short_names: self.short_names,
             cutoff: self.cutoff,
         }
     }
 
-    /// Whether an option of the MFTECmd CSV is given.
+    /// Whether an option of the CSV is given.
     pub fn has_csv_options(&self) -> bool {
         self.all_times || self.short_names || self.cutoff.is_some()
     }
@@ -402,7 +402,7 @@ impl PrefetchOptions {
 /// What `parse-usn-journal` writes.
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UsnOutputType {
-    /// One row per record (MFTECmd's $J columns and more)
+    /// One row per record
     Csv,
     /// One pretty-printed JSON object per record (range-tracking records included)
     Json,
@@ -469,7 +469,7 @@ impl UsnJournalOptions {
 /// What `parse-srum` writes.
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SrumOutputType {
-    /// One CSV table per provider (SrumECmd's tables) in a directory
+    /// One CSV table per provider in a directory
     Csv,
     /// One pretty-printed JSON object per entry
     Json,
@@ -537,7 +537,7 @@ impl SrumOptions {
 /// What `parse-lnk` writes.
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LnkOutputType {
-    /// One row per shortcut (LECmd's columns and more)
+    /// One row per shortcut
     Csv,
     /// One pretty-printed JSON object per shortcut (shell items, property store, every block)
     Json,
@@ -590,7 +590,7 @@ impl LnkOptions {
 /// What `parse-jump-lists` writes.
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JumpListOutputType {
-    /// JLECmd's two tables in a directory: AutomaticDestinations.csv and CustomDestinations.csv
+    /// Two tables in a directory: AutomaticDestinations.csv and CustomDestinations.csv
     Csv,
     /// One pretty-printed JSON object per jump list (every entry, link and property)
     Json,
@@ -648,7 +648,7 @@ impl JumpListOptions {
 /// What `parse-shimcache` writes.
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShimcacheOutputType {
-    /// One row per entry (AppCompatCacheParser's columns and more)
+    /// One row per entry
     Csv,
     /// One pretty-printed JSON object per entry
     Json,
