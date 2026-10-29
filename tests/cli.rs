@@ -856,9 +856,9 @@ fn prefetch_summary_on_the_terminal() {
         "Format versions: 30 (Windows 10/11) 2, 26 (Windows 8/8.1) 1, 23 (Windows Vista/7) 1, 17 (Windows XP/2003) 1"
     ));
     assert!(r.stdout.contains("Executables: 3"));
-    assert!(r.stdout.contains("Executions (run counts): 11"));
+    assert!(r.stdout.contains("Executions (run counts): 25"));
     assert!(r.stdout.contains(
-        "Run times recorded: 9 (2013-03-10T10:11:49.281250Z - 2024-02-05T06:17:41.144014200Z)"
+        "Run times recorded: 15 (2013-03-10T10:11:49.281250Z - 2024-02-05T06:17:41.144014200Z)"
     ));
     assert!(r.stdout.contains("Findings: 1 (medium: 1)"));
     assert!(r.stdout.contains("To save every record, add -o <FILE>"));
@@ -913,17 +913,17 @@ fn prefetch_csv_json_and_jsonl() {
         .unwrap();
     assert_eq!(rust_out["findings"][0]["code"], "SuspiciousExecutionPath");
     assert_eq!(rust_out["findings"][0]["severity"], "medium");
-    let notepad = docs
+    let consent = docs
         .iter()
-        .find(|d| d["executable_name"] == "NOTEPAD.EXE")
+        .find(|d| d["executable_name"] == "CONSENT.EXE")
         .unwrap();
-    assert_eq!(notepad["windows_version"], "Windows Vista/7");
+    assert_eq!(consent["windows_version"], "Windows Vista/7");
     assert!(
-        notepad["files"][0]["mft_entry"].is_u64(),
+        consent["files"][0]["mft_entry"].is_u64(),
         "version 23 has file references"
     );
     assert!(
-        !notepad["volumes"][0]["directories"]
+        !consent["volumes"][0]["directories"]
             .as_array()
             .unwrap()
             .is_empty()
@@ -956,14 +956,14 @@ fn prefetch_timeline_is_one_record_per_execution_sorted_by_time() {
         ]
     );
     let times: Vec<String> = csv.records().map(|r| r.unwrap()[0].to_string()).collect();
-    assert_eq!(times.len(), 9);
+    assert_eq!(times.len(), 15);
     let mut sorted = times.clone();
     sorted.sort();
     assert_eq!(times, sorted);
     assert_eq!(times[0], "2013-03-10T10:11:49.281250Z");
 }
 
-/// A Windows 7 prefetch file of NOTEPAD.EXE turned into one of SVCHOST.EXE loaded from outside
+/// A Windows 7 prefetch file of CONSENT.EXE turned into one of SVCHOST.EXE loaded from outside
 /// System32 (the names have the same length, so every offset stays valid).
 #[test]
 fn prefetch_system_binary_outside_system32_is_a_high_finding() {
@@ -981,15 +981,15 @@ fn prefetch_system_binary_outside_system32_is_a_high_finding() {
             }
         }
     }
-    let mut data = std::fs::read(repo("test_files/prefetch/NOTEPAD.EXE-D8414F97.pf")).unwrap();
+    let mut data = std::fs::read(repo("test_files/prefetch/CONSENT.EXE-531BD9EA.pf")).unwrap();
     replace_all(
         &mut data,
-        &utf16(r"SYSTEM32\NOTEPAD.EXE"),
+        &utf16(r"SYSTEM32\CONSENT.EXE"),
         &utf16(r"TEMPDIR1\SVCHOST.EXE"),
     );
-    replace_all(&mut data, &utf16("NOTEPAD.EXE"), &utf16("SVCHOST.EXE"));
+    replace_all(&mut data, &utf16("CONSENT.EXE"), &utf16("SVCHOST.EXE"));
     let dir = tempfile::tempdir().unwrap();
-    let pf = dir.path().join("SVCHOST.EXE-D8414F97.pf");
+    let pf = dir.path().join("SVCHOST.EXE-531BD9EA.pf");
     std::fs::write(&pf, data).unwrap();
 
     let r = run(&["parse-prefetch", "-f", pf.to_str().unwrap(), "-K"]);
@@ -1898,14 +1898,15 @@ fn lnk_summary_on_the_terminal() {
     for line in [
         "Shortcuts parsed: 6".to_owned(),
         "Targets: fixed drives 2, removable drives 1, CD/DVD 0, network shares 1".to_owned(),
-        "Machines that made them: 1 (sagerez)".to_owned(),
+        "Machines that made them: 2 (pc, win-3qmdjgkf3g9)".to_owned(),
         "With problems: 1".to_owned(),
         "Hidden command line (string data over 260 characters): 1".to_owned(),
         found("padded_cli_arguments.lnk") + r#"This PC\C:\Windows\System32\cmd.exe /c "set PATH="#,
         "Data after the end of the link: 1".to_owned(),
         found("appended_data.lnk") + r"This PC\All Control Panel Items\" + "\n",
         "Shell or script host started with arguments: 2".to_owned(),
-        found("msbuild_prompt.lnk") + r"C:\Windows\System32\cmd.exe /k",
+        found("cmd_powershell.lnk")
+            + r#"C:\Windows\System32\cmd.exe /c powershell.exe -c "Write-Host This is a test""#,
         "To save every record, add -o <FILE>".to_owned(),
     ] {
         assert!(r.stdout.contains(&line), "{line}\n{}", r.stdout);
@@ -1943,41 +1944,42 @@ fn lnk_csv_has_the_common_columns() {
             .find(|r| r["SourceFile"].ends_with(name))
             .unwrap()
     };
-    // Directory Opus's help, from a public test set: as the reference reads it
-    let opus = row("opus_help.lnk");
+    // Nero InfoTool, from plaso's test data: as the reference reads it
+    let nero = row("nero_infotool.lnk");
     for (column, value) in [
-        ("TargetCreated", "2015-12-25T02:42:20.167694100Z"),
-        ("TargetModified", "2015-12-17T17:36:56Z"),
-        ("FileSize", "8705626"),
+        ("TargetCreated", "2009-06-05T20:13:20Z"),
+        ("TargetModified", "2009-06-05T20:13:20Z"),
+        ("FileSize", "4635160"),
         (
             "LocalPath",
-            r"C:\Program Files\GPSoftware\Directory Opus\Help\dopus.chm",
+            r"C:\Program Files (x86)\Nero\Nero 9\Nero InfoTool\InfoTool.exe",
         ),
         (
             "TargetIDAbsolutePath",
-            r"This PC\C:\Program Files\GPSoftware\Directory Opus\Help\dopus.chm",
+            r"This PC\C:\Program Files (x86)\Nero\Nero 9\Nero InfoTool\InfoTool.exe",
         ),
-        ("TargetMFTEntryNumber", "108088"),
+        ("Arguments", "-ScParameter=30002  "),
+        ("TargetMFTEntryNumber", "81349"),
         ("TargetMFTSequenceNumber", "1"),
-        ("MachineID", "sagerez"),
-        ("MachineMACAddress", "a4:34:d9:43:f3:63"),
-        ("TrackerCreatedOn", "2015-12-25T02:28:38.498589100Z"),
-        ("VolumeSerialNumber", "6A228FAA"),
+        ("MachineID", "win-3qmdjgkf3g9"),
+        ("MachineMACAddress", "70:5a:b6:16:a5:f3"),
+        ("TrackerCreatedOn", "2010-01-29T21:02:17.840171700Z"),
+        ("VolumeSerialNumber", "70ECFA33"),
         ("DriveType", "DRIVE_FIXED"),
         ("FileAttributes", "ARCHIVE"),
         (
             "ExtraBlocksPresent",
-            "IconEnvironmentDataBlock|TrackerDataBlock|PropertyStoreDataBlock",
+            "IconEnvironmentDataBlock|SpecialFolderDataBlock|KnownFolderDataBlock|PropertyStoreDataBlock|TrackerDataBlock",
         ),
         ("ShowWindow", "SW_SHOWNORMAL"),
-        ("VolumeDroid", "38648bd4-606f-459b-91e5-d8883d4b70b1"),
-        ("FileDroid", "34b5a323-aaaf-11e5-b29b-a434d943f363"),
+        ("VolumeDroid", "c989f572-4deb-4c64-b0d1-dc4959bbff28"),
+        ("FileDroid", "958705b5-0d19-11df-9fe4-705ab616a5f3"),
         ("Problems", ""),
         ("AppendedBytes", "0"),
     ] {
-        assert_eq!(opus[column], value, "{column}");
+        assert_eq!(nero[column], value, "{column}");
     }
-    assert!(opus["HeaderFlags"].starts_with("HasLinkTargetIDList|HasLinkInfo|"));
+    assert!(nero["HeaderFlags"].starts_with("HasLinkTargetIDList|HasLinkInfo|"));
     assert_eq!(
         row("network_share_unicode.lnk")["NetworkPath"],
         r"\\127.0.0.1\TEST"
@@ -1994,29 +1996,29 @@ fn lnk_json_and_jsonl() {
     let r = run(&[
         "parse-lnk",
         "-f",
-        "test_files/lnk/opus_help.lnk",
+        "test_files/lnk/nero_infotool.lnk",
         "-t",
         "jsonl",
     ]);
     assert_eq!(r.code, 0, "{}", r.stderr);
     assert!(!r.stdout.contains("Results Summary"));
     let v: Value = serde_json::from_str(r.stdout.trim()).unwrap();
-    assert_eq!(v["tracker"]["machine_id"], "sagerez");
+    assert_eq!(v["tracker"]["machine_id"], "win-3qmdjgkf3g9");
     assert_eq!(
         v["tracker"]["volume_droid_birth"],
-        "38648bd4-606f-459b-91e5-d8883d4b70b1"
+        "c989f572-4deb-4c64-b0d1-dc4959bbff28"
     );
-    assert_eq!(v["target_mft_entry"], 108_088);
+    assert_eq!(v["target_mft_entry"], 81_349);
     assert_eq!(v["header"]["show_command"], "SW_SHOWNORMAL");
     let items = v["target_items"].as_array().unwrap();
     assert_eq!(items[0]["name"], "This PC");
-    assert_eq!(items.last().unwrap()["name"], "dopus.chm");
+    assert_eq!(items.last().unwrap()["name"], "InfoTool.exe");
     assert_eq!(v["extra_blocks"][0], "IconEnvironmentDataBlock");
     assert!(
         v["icon_environment"]
             .as_str()
             .unwrap()
-            .starts_with("%SystemDrive%")
+            .starts_with("%ProgramFiles%")
     );
 
     let dir = tempfile::tempdir().unwrap();
@@ -2050,15 +2052,15 @@ fn lnk_json_and_jsonl() {
 fn lnk_times_that_are_not_times() {
     // a link whose target creation time is 2^63 (100 ns units), past any time: empty, no panic
     let dir = tempfile::tempdir().unwrap();
-    let mut data = std::fs::read(repo("test_files/lnk/opus_help.lnk")).unwrap();
+    let mut data = std::fs::read(repo("test_files/lnk/nero_infotool.lnk")).unwrap();
     data[28..36].copy_from_slice(&0x8000_0000_0000_0000u64.to_le_bytes());
-    let file = dir.path().join("opus_help.lnk");
+    let file = dir.path().join("nero_infotool.lnk");
     std::fs::write(&file, &data).unwrap();
     let r = run(&["parse-lnk", "-f", file.to_str().unwrap(), "-t", "jsonl"]);
     assert_eq!(r.code, 0, "{}", r.stderr);
     let v: Value = serde_json::from_str(r.stdout.trim()).unwrap();
     assert_eq!(v["header"]["target_created"], "");
-    assert_eq!(v["header"]["target_modified"], "2015-12-17T17:36:56Z");
+    assert_eq!(v["header"]["target_modified"], "2009-06-05T20:13:20Z");
 }
 
 #[test]
@@ -2084,7 +2086,7 @@ fn lnk_input_and_output_errors() {
     let r = run(&[
         "parse-lnk",
         "-f",
-        "test_files/lnk/opus_help.lnk",
+        "test_files/lnk/nero_infotool.lnk",
         "--code-page",
         "12345",
         "-K",
@@ -2102,7 +2104,7 @@ fn lnk_input_and_output_errors() {
     let r = run(&[
         "parse-lnk",
         "-f",
-        "test_files/lnk/opus_help.lnk",
+        "test_files/lnk/nero_infotool.lnk",
         "-o",
         out.to_str().unwrap(),
         "-K",
@@ -2125,11 +2127,11 @@ fn jump_list_summary_on_the_terminal() {
     let found = |name: &str| format!("  {} (", Path::new(JUMP_LIST_DIR).join(name).display());
     for line in [
         "Jump lists parsed: 4 (automatic 3, custom 1)".to_owned(),
-        "Entries: 50 (pinned 4), custom list links 6".to_owned(),
+        "Entries: 51 (pinned 4), custom list links 6".to_owned(),
         "Applications: 4 (4 named from their AppID)".to_owned(),
         "  Windows Explorer Windows 8.1 (f01b4d95cf55d32a): 9 links".to_owned(),
-        "Machines in the entries: 3 (desktop-annfp9d, pc, win7x64)".to_owned(),
-        "Targets: fixed drives 57, removable drives 0, CD/DVD 1, network shares 0".to_owned(),
+        "Machines in the entries: 3 (citadel-dc01, desktop-gnccvrk, pc)".to_owned(),
+        "Targets: fixed drives 58, removable drives 0, CD/DVD 1, network shares 5".to_owned(),
         "With problems: 0".to_owned(),
         "Links left over from an earlier version of a custom list: 2".to_owned(),
         found("5d696d521de238c3.customDestinations-ms")
@@ -2173,34 +2175,37 @@ fn jump_list_csv_has_the_common_columns() {
     );
     assert_eq!(header[43], "Notes");
     assert_eq!(header.len(), 50);
-    assert_eq!(rows.len(), 50);
+    assert_eq!(rows.len(), 51);
     let row = |file: &str, mru: &str| {
         rows.iter()
             .find(|r| r["SourceFile"].ends_with(file) && r["MRU"] == mru)
             .unwrap()
     };
-    // Windows 10 Explorer, from a public test set: as the reference reads it
-    let temp = row("f01b4d95cf55d32a.automaticDestinations-ms", "0");
+    // Windows 10 Explorer, from the DFIR Artifact Museum: as the reference reads it
+    let targets = row("f01b4d95cf55d32a.automaticDestinations-ms", "3");
     for (column, value) in [
         ("AppId", "f01b4d95cf55d32a"),
         ("AppIdDescription", "Windows Explorer Windows 8.1"),
-        ("DestListVersion", "3"),
+        ("DestListVersion", "4"),
         ("LastUsedEntryNumber", "9"),
         ("EntryNumber", "7"),
-        ("CreationTime", "2015-11-24T18:39:02.491271400Z"),
-        ("LastModified", "2015-11-24T20:31:34.447525300Z"),
-        ("Hostname", "desktop-annfp9d"),
-        ("MacAddress", "00:15:5d:01:6d:02"),
-        ("Path", r"C:\Temp"),
-        ("InteractionCount", "2"),
+        ("CreationTime", "2022-02-05T19:30:37.504034700Z"),
+        ("LastModified", "2022-02-05T19:39:12.024818800Z"),
+        ("Hostname", "desktop-gnccvrk"),
+        ("MacAddress", "ec:63:d7:72:83:36"),
+        ("Path", r"C:\Users\AndrewRathbun\Desktop\Targets"),
+        ("InteractionCount", "1"),
         ("PinStatus", "False"),
-        ("FileDroid", "a21b9d4a-92da-11e5-88e1-00155d016d02"),
-        ("VolumeBirthDroid", "4c01e77a-2661-40c9-b838-14ff153a26f5"),
-        ("TargetCreated", "2015-11-24T20:30:53.363218400Z"),
-        ("LocalPath", r"C:\Temp"),
-        ("TargetIDAbsolutePath", r"This PC\C:\Temp"),
-        ("TargetMFTEntryNumber", "192"),
-        ("TargetMFTSequenceNumber", "5"),
+        ("FileDroid", "1884d55b-86ba-11ec-9e53-ec63d7728336"),
+        ("VolumeBirthDroid", "a0eda9fe-dbef-4d91-bf7a-eabd0971f8df"),
+        ("TargetCreated", "2022-02-05T19:39:11.619072400Z"),
+        ("LocalPath", r"C:\Users\AndrewRathbun\Desktop\Targets"),
+        (
+            "TargetIDAbsolutePath",
+            r"This PC\C:\Users\AndrewRathbun\Desktop\Targets",
+        ),
+        ("TargetMFTEntryNumber", "105479"),
+        ("TargetMFTSequenceNumber", "2"),
         ("DriveType", "DRIVE_FIXED"),
         (
             "ExtraBlocksPresent",
@@ -2209,24 +2214,30 @@ fn jump_list_csv_has_the_common_columns() {
         ("Notes", ""),
         ("Problems", ""),
     ] {
-        assert_eq!(temp[column], value, "{column}");
+        assert_eq!(targets[column], value, "{column}");
     }
-    // Windows 7 Explorer, a version 1 list: no interaction count is recorded: 0
-    let videos = row("1b4dd67f29cb1962.automaticDestinations-ms", "0");
+    // a pinned known folder, named
+    let documents = row("f01b4d95cf55d32a.automaticDestinations-ms", "6");
+    assert_eq!(
+        documents["Path"],
+        "knownfolder:{FDD39AD0-238F-46AF-ADB4-6C85480369C7}"
+    );
+    assert_eq!(documents["DisplayPath"], "Personal");
+    assert_eq!(documents["PinStatus"], "True");
+    // Notepad on Windows Server 2012 R2, a version 1 list: no interaction count is recorded: 0
+    let notepad = row("9b9cdc69c1c24e2b.automaticDestinations-ms", "0");
     for (column, value) in [
         ("DestListVersion", "1"),
-        ("EntryNumber", "4"),
+        ("EntryNumber", "5"),
         ("InteractionCount", "0"),
-        ("Hostname", "win7x64"),
-        (
-            "Path",
-            r"::{031E4825-7B94-4DC3-B131-E946B44C8DD5}\Videos.library-ms",
-        ),
-        ("DisplayPath", r"UsersLibraries\Videos.library-ms"),
+        ("Hostname", "citadel-dc01"),
+        ("Path", r"C:\FileShare\Secret\Beth_Secret.txt"),
+        ("LastModified", "2020-09-19T03:35:07.829277600Z"),
+        ("NetworkPath", r"\\CITADEL-DC01\FileShare"),
+        ("TargetMFTEntryNumber", "87111"),
     ] {
-        assert_eq!(videos[column], value, "{column}");
+        assert_eq!(notepad[column], value, "{column}");
     }
-    assert!(videos["LastModified"].starts_with("2016-01-16T20:23:24"));
     // A Windows 10 version 6 list that ends inside its last sector: entry 1 is a file staged
     // for a CD burn, named as the reference names it
     let burn = row("5f7b5f1e01b83767.automaticDestinations-ms", "36");
@@ -2281,16 +2292,19 @@ fn jump_list_json_and_jsonl() {
     let v: Value = serde_json::from_str(r.stdout.trim()).unwrap();
     assert_eq!(v["type"], "automatic");
     assert_eq!(v["app_id"], "f01b4d95cf55d32a");
-    assert_eq!(v["dest_list"]["version"], 3);
+    assert_eq!(v["dest_list"]["version"], 4);
     assert_eq!(v["dest_list"]["last_entry_number"], 9);
     let entries = v["entries"].as_array().unwrap();
     assert_eq!(entries.len(), 9);
-    assert_eq!(entries[0]["stream"], "7");
-    assert_eq!(entries[0]["interaction_count"], 2);
-    assert_eq!(entries[0]["link"]["target_path"], r"This PC\C:\Temp");
+    assert_eq!(entries[3]["stream"], "7");
+    assert_eq!(entries[3]["interaction_count"], 1);
     assert_eq!(
-        entries[0]["link"]["tracker"]["machine_id"],
-        "desktop-annfp9d"
+        entries[3]["link"]["target_path"],
+        r"This PC\C:\Users\AndrewRathbun\Desktop\Targets"
+    );
+    assert_eq!(
+        entries[3]["link"]["tracker"]["machine_id"],
+        "desktop-gnccvrk"
     );
     assert_eq!(v["streams"].as_array().unwrap().len(), 10);
     assert_eq!(v["problems"].as_array().unwrap().len(), 0);
@@ -2371,20 +2385,23 @@ fn jump_list_streams_no_entry_names() {
         "entry 7 has no stream",
         "With problems: 1",
         "Link streams no DestList entry names (removed or damaged entries): 1",
-        r"(stream 99) -> C:\Temp",
+        r"(stream 99) -> C:\Users\AndrewRathbun\Desktop\Targets",
     ] {
         assert!(r.stdout.contains(line), "{line}\n{}", r.stdout);
     }
     let (_, rows) = csv_rows(&out.join("AutomaticDestinations.csv"));
     assert_eq!(rows.len(), 10);
     let entry = rows.iter().find(|r| r["EntryNumber"] == "7").unwrap();
-    assert_eq!(entry["Path"], r"C:\Temp");
+    assert_eq!(entry["Path"], r"C:\Users\AndrewRathbun\Desktop\Targets");
     assert_eq!(entry["LocalPath"], "");
     // a link stream no entry names
     let unlisted = rows.iter().find(|r| r["EntryNumber"] == "99").unwrap();
     assert_eq!(unlisted["MRU"], "");
     assert_eq!(unlisted["Notes"], "Found in Directory, not DestList");
-    assert_eq!(unlisted["LocalPath"], r"C:\Temp");
+    assert_eq!(
+        unlisted["LocalPath"],
+        r"C:\Users\AndrewRathbun\Desktop\Targets"
+    );
     assert_eq!(unlisted["Path"], "");
 }
 
@@ -2404,8 +2421,8 @@ fn jump_list_times_that_are_not_times() {
     // panic (it overflowed the conversion)
     let dir = tempfile::tempdir().unwrap();
     let mut data = std::fs::read(repo(EXPLORER_WIN10)).unwrap();
-    // 2015-11-24T20:31:34.4475253Z
-    replace_u64(&mut data, 0x01d1_26f7_1c53_a075, 0x8000_0000_0000_0000);
+    // 2022-02-08T20:44:20.6000878Z
+    replace_u64(&mut data, 0x01d8_1d2c_a5de_3aee, 0x8000_0000_0000_0000);
     let file = dir.path().join("f01b4d95cf55d32a.automaticDestinations-ms");
     std::fs::write(&file, &data).unwrap();
     let r = run(&[
@@ -2420,7 +2437,7 @@ fn jump_list_times_that_are_not_times() {
     assert_eq!(v["entries"][0]["last_used"], "");
     assert_eq!(
         v["entries"][1]["last_used"],
-        "2015-11-24T20:31:34.433022100Z"
+        "2022-02-06T22:09:00.177299400Z"
     );
     let out = dir.path().join("jl");
     let r = run(&[
@@ -2434,7 +2451,10 @@ fn jump_list_times_that_are_not_times() {
     assert_eq!(r.code, 0, "{}", r.stdout);
     let (_, rows) = csv_rows(&out.join("AutomaticDestinations.csv"));
     assert_eq!(rows[0]["LastModified"], "");
-    assert_eq!(rows[0]["Path"], r"C:\Temp");
+    assert_eq!(
+        rows[0]["Path"],
+        r"C:\temp\tout\c\ProgramData\Microsoft\search\data\applications\windows"
+    );
 }
 
 #[test]
@@ -2677,7 +2697,8 @@ fn shimcache_csv_has_the_common_columns() {
 
 #[test]
 fn shimcache_values_as_json() {
-    // AppCompatCache values saved on their own: Windows XP, 7 (32-bit), 8.0 and 11
+    // AppCompatCache values saved on their own: Windows XP, 7 (32-bit), Server 2012 R2 (its
+    // first dword 0) and 11
     let r = run(&[
         "parse-shimcache",
         "-f",
@@ -2704,17 +2725,17 @@ fn shimcache_values_as_json() {
 
     for (file, count, executed, format, path) in [
         (
-            "win7x86.bin",
-            91,
-            75,
+            "regipy_win7x86.bin",
+            330,
+            238,
             "Windows7x86",
-            r"C:\Windows\system32\LogonUI.exe",
+            r"C:\Program Files\McAfee\VirusScan Enterprise\mfeann.exe",
         ),
         (
-            "Win80.bin",
-            104,
-            88,
-            "Windows80_Windows2012",
+            "Win2012R2-StolenSzechuan-ControlSet001.bin",
+            140,
+            101,
+            "Windows81_Windows2012R2",
             r"SYSVOL\Windows\System32\LogonUI.exe",
         ),
         (
@@ -2799,7 +2820,7 @@ fn shimcache_input_and_output_errors() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("keep.csv");
     std::fs::write(&file, b"keep").unwrap();
-    let value = format!("{SHIMCACHE_DIR}/win7x86.bin");
+    let value = format!("{SHIMCACHE_DIR}/regipy_win7x86.bin");
     let r = run(&[
         "parse-shimcache",
         "-f",
