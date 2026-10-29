@@ -2812,3 +2812,387 @@ fn shimcache_input_and_output_errors() {
     assert_eq!(r.code, 1);
     assert!(r.stdout.contains("is a directory"), "{}", r.stdout);
 }
+
+// --- parse-defender-quarantine ---------------------------------------------------------------
+
+const QUARANTINE_DIR: &str = "test_files/defender_quarantine";
+const QUARANTINED_FILE: &str = "AAB535B2BF6E319A41A914FDF71F7509D42E847F";
+const QUARANTINED_HIVE: &str = "E2600EF2CC97428CF2377419502B3D3330483F01";
+const ORPHAN_CONTENT: &str = "5CA5633C0E2AE818B85C5695677170EA42D55131";
+const FILE_SHA256: &str = "828804761c959b70327e6b05c4cab83c30aafdcc193bc29209d41b15e6d9c358";
+
+/// A copy of the test quarantine folder at `dir/<host>/C/ProgramData/Microsoft/Windows
+/// Defender/Quarantine`.
+fn quarantine_host(dir: &Path, host: &str) -> PathBuf {
+    let root = dir
+        .join(host)
+        .join("C/ProgramData/Microsoft/Windows Defender/Quarantine");
+    let from = repo(&format!("{QUARANTINE_DIR}/Quarantine"));
+    let mut stack = vec![from.clone()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            let target = root.join(e.path().strip_prefix(&from).unwrap());
+            if e.path().is_dir() {
+                std::fs::create_dir_all(&target).unwrap();
+                stack.push(e.path());
+            } else {
+                std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+                std::fs::copy(e.path(), target).unwrap();
+            }
+        }
+    }
+    root
+}
+
+fn quarantine_csv(args: &[&str]) -> (Run, Vec<std::collections::HashMap<String, String>>) {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("quarantine.csv");
+    let mut argv = vec!["parse-defender-quarantine", "-K"];
+    argv.extend_from_slice(args);
+    argv.extend(["-o", out.to_str().unwrap()]);
+    let r = run(&argv);
+    let rows = if out.exists() {
+        let mut reader = csv::Reader::from_path(&out).unwrap();
+        let header: Vec<String> = reader
+            .headers()
+            .unwrap()
+            .iter()
+            .map(str::to_owned)
+            .collect();
+        reader
+            .records()
+            .map(|row| {
+                header
+                    .iter()
+                    .cloned()
+                    .zip(row.unwrap().iter().map(str::to_owned))
+                    .collect()
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    (r, rows)
+}
+
+#[test]
+fn defender_quarantine_summary_on_the_terminal() {
+    let r = run(&[
+        "parse-defender-quarantine",
+        "-K",
+        "-d",
+        QUARANTINE_DIR,
+        "-q",
+    ]);
+    assert_eq!(r.code, 0, "{}{}", r.stdout, r.stderr);
+    for line in [
+        "Quarantine folders: 1",
+        "Quarantine entries parsed: 2",
+        "Resources quarantined: 3 (file: 1, service: 1, startup: 1)",
+        "Contents or records no entry holds: 1",
+        "HackTool:Win32/Example!MSR (1)",
+        "Trojan:Win32/Example.A (1)",
+    ] {
+        assert!(r.stdout.contains(line), "{line}: {}", r.stdout);
+    }
+    assert!(!r.stdout.contains("WARNING"), "{}", r.stdout);
+}
+
+#[test]
+fn defender_quarantine_csv_has_every_resource() {
+    let (r, rows) = quarantine_csv(&["-d", QUARANTINE_DIR]);
+    assert_eq!(r.code, 0, "{}{}", r.stdout, r.stderr);
+    let kinds: Vec<(&str, &str)> = rows
+        .iter()
+        .map(|row| (row["Record"].as_str(), row["ResourceType"].as_str()))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            ("resource", "file"),
+            ("resource", "service"),
+            ("resource", "startup"),
+            ("orphan-content", "")
+        ]
+    );
+    let file = &rows[0];
+    for (column, value) in [
+        ("QuarantineTime", "2023-12-19T09:36:40.1234567Z"),
+        ("ThreatName", "HackTool:Win32/Example!MSR"),
+        ("ThreatId", "2147700000"),
+        ("Path", r"\\?\C:\Users\alice\Downloads\tool\tool.exe"),
+        ("PhysicalPath", r"C:\Users\alice\Downloads\tool\tool.exe"),
+        ("FileSize", "61"),
+        ("CreationTime", "2023-12-19T09:29:59.0000000Z"),
+        ("LastAccessTime", "2023-12-19T09:36:30.5000000Z"),
+        ("LastWriteTime", "2023-12-19T09:30:00.0000000Z"),
+        ("Attributes", "0x20"),
+        ("Owner", "S-1-5-21-1111-2222-3333-1001"),
+        ("ZoneId", "3"),
+        ("HostUrl", "https://example.com/tool.zip"),
+        ("ContentSize", "61"),
+        ("SHA256", FILE_SHA256),
+        (
+            "Streams",
+            "SecurityData, Data, AlternateData :Zone.Identifier:$DATA",
+        ),
+        ("ResourceId", QUARANTINED_FILE),
+        ("EntryId", "80012345-0000-0000-1A2B-3C4D5E6F7081"),
+        ("ScanId", "6B1E0C2D-3F4A-4B5C-8D9E-0F1A2B3C4D5E"),
+        ("ExtractedFile", ""),
+        ("Problems", ""),
+    ] {
+        assert_eq!(file[column], value, "{column}");
+    }
+    assert!(file["ResourceRecordFile"].ends_with(QUARANTINED_FILE));
+    let service = &rows[1];
+    assert_eq!(service["Streams"], "Hive");
+    assert_eq!(service["ContentSize"], "4096");
+    assert_eq!(service["ResourceId"], QUARANTINED_HIVE);
+    assert_eq!(rows[2]["ResourceId"], "");
+    let orphan = &rows[3];
+    assert_eq!(orphan["ResourceId"], ORPHAN_CONTENT);
+    assert_eq!(orphan["Problems"], "no entry holds this content");
+}
+
+#[test]
+fn defender_quarantine_json_and_jsonl() {
+    let dir = tempfile::tempdir().unwrap();
+    let json_out = dir.path().join("q.json");
+    let r = run(&[
+        "parse-defender-quarantine",
+        "-K",
+        "-d",
+        QUARANTINE_DIR,
+        "-t",
+        "json",
+        "-o",
+        json_out.to_str().unwrap(),
+    ]);
+    assert_eq!(r.code, 0, "{}{}", r.stdout, r.stderr);
+    let docs = json_documents(&std::fs::read_to_string(&json_out).unwrap());
+    assert_eq!(docs.len(), 4);
+    let file = &docs[0];
+    assert_eq!(file["record"], "resource");
+    assert_eq!(file["resource_type"], "file");
+    assert_eq!(file["fields"].as_array().unwrap().len(), 8);
+    assert_eq!(file["fields"][0]["name"], "ResourceId");
+    assert_eq!(file["content"]["sha256"], FILE_SHA256);
+    assert_eq!(file["content"]["streams"].as_array().unwrap().len(), 3);
+    assert_eq!(file["content"]["zone_identifier"]["ZoneId"], "3");
+    assert_eq!(
+        file["resource_record_entries"],
+        serde_json::json!(["80012345-0000-0000-1A2B-3C4D5E6F7081"])
+    );
+    // JSONL on stdout: the data alone
+    let r = run(&[
+        "parse-defender-quarantine",
+        "-K",
+        "-d",
+        QUARANTINE_DIR,
+        "-t",
+        "jsonl",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let lines: Vec<Value> = r
+        .stdout
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 4);
+    assert_eq!(lines[3]["record"], "orphan-content");
+}
+
+#[test]
+fn defender_quarantine_hosts_damage_and_missing_contents() {
+    let dir = tempfile::tempdir().unwrap();
+    quarantine_host(dir.path(), "HOST1");
+    let host2 = quarantine_host(dir.path(), "HOST2");
+    // HOST2: the file's content gone, the service's entry changed, and a file that isn't an entry
+    std::fs::remove_file(host2.join(format!(
+        "ResourceData/{}/{QUARANTINED_FILE}",
+        &QUARANTINED_FILE[..2]
+    )))
+    .unwrap();
+    let service_entry = host2.join("Entries/{80054321-0000-0000-9A8B-7C6D5E4F3021}");
+    let mut bytes = std::fs::read(&service_entry).unwrap();
+    bytes[70] ^= 1;
+    std::fs::write(&service_entry, bytes).unwrap();
+    std::fs::write(host2.join("Entries/notes.txt"), b"not an entry").unwrap();
+
+    let (r, rows) = quarantine_csv(&["-d", dir.path().to_str().unwrap()]);
+    assert_eq!(r.code, 0, "{}{}", r.stdout, r.stderr);
+    assert!(r.stdout.contains("Quarantine folders: 2"), "{}", r.stdout);
+    assert!(r.stdout.contains("Could not parse: 1"), "{}", r.stdout);
+    let host = |row: &std::collections::HashMap<String, String>| {
+        if row["QuarantineFolder"].contains("HOST1") {
+            1
+        } else {
+            2
+        }
+    };
+    let host1: Vec<_> = rows.iter().filter(|r| host(r) == 1).collect();
+    let host2_rows: Vec<_> = rows.iter().filter(|r| host(r) == 2).collect();
+    assert_eq!(host1.len(), 4);
+    assert!(
+        host1
+            .iter()
+            .all(|r| r["Problems"].is_empty() || r["Record"] == "orphan-content")
+    );
+    let file = host2_rows
+        .iter()
+        .find(|r| r["ResourceType"] == "file")
+        .unwrap();
+    assert!(
+        file["Problems"].starts_with("its content isn't there (ResourceData"),
+        "{}",
+        file["Problems"]
+    );
+    assert_eq!(file["SHA256"], "");
+    let service = host2_rows
+        .iter()
+        .find(|r| r["ResourceType"] == "service")
+        .unwrap();
+    assert!(
+        service["Problems"].contains("CRC-32"),
+        "{}",
+        service["Problems"]
+    );
+    // the file's resource record is still there, beside the missing content
+    assert!(file["ResourceRecordFile"].ends_with(QUARANTINED_FILE));
+    assert!(host2_rows.iter().all(|r| r["Record"] != "orphan-record"));
+}
+
+#[test]
+fn defender_quarantine_extracts_only_when_asked() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("extracted");
+    let r = run(&[
+        "parse-defender-quarantine",
+        "-K",
+        "-d",
+        QUARANTINE_DIR,
+        "--extract",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(r.code, 0, "{}{}", r.stdout, r.stderr);
+    assert!(r.stdout.contains("WARNING: --extract"), "{}", r.stdout);
+    let mut names: Vec<String> = std::fs::read_dir(&out)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        [
+            format!("{ORPHAN_CONTENT}.bin"),
+            format!("{QUARANTINED_FILE}.Zone.Identifier"),
+            format!("{QUARANTINED_FILE}.bin"),
+            format!("{QUARANTINED_FILE}.security"),
+            format!("{QUARANTINED_HIVE}.hive"),
+        ]
+    );
+    let file = out.join(format!("{QUARANTINED_FILE}.bin"));
+    let data = std::fs::read(&file).unwrap();
+    assert!(data.starts_with(b"A harmless line of text"));
+    assert_eq!(data.len(), 61);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&file).unwrap().permissions().mode();
+        assert_eq!(mode & 0o111, 0, "executable: {mode:o}");
+    }
+    assert!(r.stdout.contains("Files extracted: 5"), "{}", r.stdout);
+
+    // Again: the same files are there, nothing written.
+    let r = run(&[
+        "parse-defender-quarantine",
+        "-K",
+        "-d",
+        QUARANTINE_DIR,
+        "--extract",
+        out.to_str().unwrap(),
+    ]);
+    assert!(r.stdout.contains("Files extracted: 0"), "{}", r.stdout);
+    assert!(r.stdout.contains("5 already there"), "{}", r.stdout);
+
+    // A file holding something else isn't overwritten, unless -C.
+    std::fs::write(&file, b"something else").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let (r, rows) = quarantine_csv(&["-d", QUARANTINE_DIR, "--extract", out.to_str().unwrap()]);
+    assert!(r.stdout.contains("1 not overwritten"), "{}", r.stdout);
+    assert!(
+        rows[0]["Problems"].contains("not overwritten"),
+        "{:?}",
+        rows[0]
+    );
+    assert_eq!(std::fs::read(&file).unwrap(), b"something else");
+    let dir2 = tempfile::tempdir().unwrap();
+    let csv = dir2.path().join("q.csv");
+    let r = run(&[
+        "parse-defender-quarantine",
+        "-K",
+        "-d",
+        QUARANTINE_DIR,
+        "--extract",
+        out.to_str().unwrap(),
+        "-o",
+        csv.to_str().unwrap(),
+        "-C",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stdout);
+    assert_eq!(std::fs::read(&file).unwrap(), data);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&file).unwrap().permissions().mode();
+        assert_eq!(mode & 0o111, 0, "executable after -C: {mode:o}");
+    }
+}
+
+#[test]
+fn defender_quarantine_input_and_output_errors() {
+    let r = run(&["parse-defender-quarantine", "-K", "-d", "no/such/dir"]);
+    assert_eq!(r.code, 1);
+    let empty = tempfile::tempdir().unwrap();
+    let r = run(&[
+        "parse-defender-quarantine",
+        "-K",
+        "-d",
+        empty.path().to_str().unwrap(),
+    ]);
+    assert_eq!(r.code, 1);
+    assert!(
+        r.stdout.contains("No Defender quarantine folders"),
+        "{}",
+        r.stdout
+    );
+    // -C needs somewhere to write
+    let r = run(&[
+        "parse-defender-quarantine",
+        "-K",
+        "-d",
+        QUARANTINE_DIR,
+        "-C",
+    ]);
+    assert_ne!(r.code, 0);
+    // one entry with -f, and a file that isn't one
+    let entry =
+        format!("{QUARANTINE_DIR}/Quarantine/Entries/{{80012345-0000-0000-1A2B-3C4D5E6F7081}}");
+    let (r, rows) = quarantine_csv(&["-f", &entry]);
+    assert_eq!(r.code, 0, "{}{}", r.stdout, r.stderr);
+    assert_eq!(rows.len(), 1, "no orphans with -f");
+    assert_eq!(rows[0]["SHA256"], FILE_SHA256);
+    let r = run(&[
+        "parse-defender-quarantine",
+        "-K",
+        "-f",
+        "test_files/defender_quarantine/README.md",
+    ]);
+    assert_eq!(r.code, 1);
+    assert!(r.stdout.contains("Could not parse"), "{}", r.stdout);
+}

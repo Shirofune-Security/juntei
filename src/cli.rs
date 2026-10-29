@@ -102,6 +102,16 @@ pub enum Commands {
         disable_version_flag = true
     )]
     ParseShimcache(ShimcacheOptions),
+
+    /// Parse Microsoft Defender's quarantine: what was quarantined, for which threat and when, and the quarantined files' hashes, owners and download origins (extracted only with --extract)
+    #[command(
+        author = AUTHOR,
+        version = VERSION,
+        help_template = "\nVersion: {version}\n{author-with-newline}\n{usage-heading}\n  juntei parse-defender-quarantine <INPUT> [OPTIONS]\n\n{all-args}",
+        disable_help_flag = true,
+        disable_version_flag = true
+    )]
+    ParseDefenderQuarantine(DefenderQuarantineOptions),
 }
 
 #[derive(Args, Clone, Debug, Default)]
@@ -683,6 +693,61 @@ impl ShimcacheOptions {
     }
 
     /// Entries on stdout (`-t` without `-o`): nothing but the data may be printed there.
+    pub fn data_on_stdout(&self) -> bool {
+        self.output.is_none() && self.output_type.is_some()
+    }
+}
+
+/// What `parse-defender-quarantine` writes.
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DefenderQuarantineOutputType {
+    /// One row per resource quarantined (and per content or record no entry holds)
+    Csv,
+    /// One pretty-printed JSON object per record, with every field and stream
+    Json,
+    /// One JSON object per line
+    Jsonl,
+}
+
+#[derive(Args, Clone, Debug, Default)]
+#[clap(group(ArgGroup::new("input").args(["directory", "filepath"]).required(true).multiple(false)))]
+#[clap(group(ArgGroup::new("destination").args(["output", "extract"]).multiple(true)))]
+pub struct DefenderQuarantineOptions {
+    /// Directory to search recursively for Defender quarantine folders (a volume, a Quarantine folder, a collection of hosts)
+    #[arg(help_heading = Some("Input"), short = 'd', long, value_name = "DIR", display_order = 100)]
+    pub directory: Option<PathBuf>,
+
+    /// File path to one quarantine entry (Quarantine\Entries\{GUID})
+    #[arg(help_heading = Some("Input"), short = 'f', long = "file", value_name = "FILE", display_order = 101)]
+    pub filepath: Option<PathBuf>,
+
+    /// Save every record to a file
+    #[arg(help_heading = Some("Output"), short = 'o', long, value_name = "FILE", display_order = 300)]
+    pub output: Option<PathBuf>,
+
+    /// Output type: csv (default), json, jsonl. Without -o, the records are written to stdout
+    #[arg(help_heading = Some("Output"), short = 't', long = "output-type", value_name = "TYPE", value_enum, hide_possible_values = true, display_order = 301)]
+    pub output_type: Option<DefenderQuarantineOutputType>,
+
+    /// Write the quarantined files (likely malware, never run) to this directory, named by their SHA-1
+    #[arg(help_heading = Some("Output"), long, value_name = "DIR", display_order = 302)]
+    pub extract: Option<PathBuf>,
+
+    /// Overwrite files when saving or extracting
+    #[arg(help_heading = Some("Output"), short = 'C', long, requires = "destination", display_order = 303)]
+    pub clobber: bool,
+
+    #[clap(flatten)]
+    pub common: CommonOptions,
+}
+
+impl DefenderQuarantineOptions {
+    pub fn output_type(&self) -> DefenderQuarantineOutputType {
+        self.output_type
+            .unwrap_or(DefenderQuarantineOutputType::Csv)
+    }
+
+    /// Records on stdout (`-t` without `-o`): nothing but the data may be printed there.
     pub fn data_on_stdout(&self) -> bool {
         self.output.is_none() && self.output_type.is_some()
     }
