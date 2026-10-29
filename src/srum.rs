@@ -14,7 +14,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use indicatif::ProgressBar;
 use serde::ser::{Serialize, SerializeMap, Serializer};
 use serde_json::{Value as Json, json};
-use srum::{Context, Entry, Kind, Srum, Time, Value};
+use srum::{Context, Entry, Kind, Options, Srum, Time, Value, ValueState};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
@@ -44,6 +44,17 @@ pub fn run(opts: &SrumOptions) -> i32 {
         );
         return 1;
     }
+    if opts.include_value_state && output_type == SrumOutputType::Csv {
+        report_error(
+            None,
+            "--include-value-state needs -t json or jsonl: a CSV cell can't say how it was read.",
+        );
+        return 1;
+    }
+    let options = Options {
+        value_states: opts.include_value_state,
+        raw_values: opts.include_value_state,
+    };
 
     // --- inputs ---------------------------------------------------------------------------
     let (databases, root) = match (&opts.filepath, &opts.directory) {
@@ -122,8 +133,13 @@ pub fn run(opts: &SrumOptions) -> i32 {
     let mut stats = Stats::default();
     let mut used_names = HashSet::new();
     let mut saved = 0usize;
-    let mut stdout_writer = data_on_stdout
-        .then(|| RecordWriter::new(Box::new(BufWriter::new(io::stdout())), output_type));
+    let mut stdout_writer = data_on_stdout.then(|| {
+        RecordWriter::new(
+            Box::new(BufWriter::new(io::stdout())),
+            output_type,
+            opts.include_value_state,
+        )
+    });
     for database in &databases {
         let source = database.to_string_lossy().to_string();
         if let Some(b) = &bar {
@@ -154,8 +170,9 @@ pub fn run(opts: &SrumOptions) -> i32 {
         let parsed = std::fs::read(database)
             .map_err(|e| e.to_string())
             .and_then(|data| {
-                srum::read_with(&data, context.as_ref().unwrap_or(&Context::default()))
-                    .map_err(|e| e.to_string())
+                let none = Context::default();
+                let context = context.as_ref().unwrap_or(&none);
+                srum::read_with_options(&data, context, &options).map_err(|e| e.to_string())
             });
         let srum = match parsed {
             Ok(srum) => srum,
@@ -186,11 +203,13 @@ pub fn run(opts: &SrumOptions) -> i32 {
                             || out.clone(),
                             |n| out.join(format!("{n}.{}", output_type.extension())),
                         );
-                        write_entries_to(&path, &srum, &source, output_type).map(|()| saved += 1)
+                        let value_states = opts.include_value_state;
+                        write_entries_to(&path, &srum, &source, output_type, value_states)
+                            .map(|()| saved += 1)
                     }
                 }
             }
-            (None, Some(w)) => srum.entries.iter().try_for_each(|e| w.entry(e, &source)),
+            (None, Some(w)) => w.database(&srum, &source),
             (None, None) => Ok(()),
         };
         if let Err(e) = written {
@@ -520,6 +539,81 @@ impl Serialize for Ordered<'_> {
     }
 }
 
+// --- value states ------------------------------------------------------------------------------
+
+/// The output columns read from a database column under another name.
+const DATABASE_NAMES: [(&str, &str); 2] = [("Id", "AutoIncId"), ("Timestamp", "TimeStamp")];
+
+/// The columns of each provider's entries in `srum` (the two energy usage tables have different
+/// ones), besides the common ones, in the order first seen.
+fn provider_columns(srum: &Srum) -> HashMap<String, Vec<String>> {
+    let mut seen: HashMap<String, (Vec<String>, HashSet<String>)> = HashMap::new();
+    for e in &srum.entries {
+        let (order, names) = seen.entry(output_name(e)).or_default();
+        for (name, _) in &e.values {
+            if names.insert(name.clone()) {
+                order.push(name.clone());
+            }
+        }
+    }
+    seen.into_iter()
+        .map(|(provider, (order, _))| (provider, order))
+        .collect()
+}
+
+/// How a value was read, as `_value_state` says it.
+fn state_name(state: ValueState) -> &'static str {
+    match state {
+        ValueState::Parsed => "parsed",
+        ValueState::Null => "database_null",
+        ValueState::Absent => "column_absent",
+        ValueState::Unsupported => "unsupported_type",
+        ValueState::Damaged => "decode_error",
+    }
+}
+
+/// `_value_state` and `_raw` for entry `e`, whose output columns are `columns`: the provider's
+/// columns its table hasn't are added, as null. Only values read from the database have a state
+/// (`Id`, `Timestamp`, `UserId`, `AppId` and the table's own columns, not what is made from
+/// them); a time column holding a number that is no time (0, negative, past 9999), written as
+/// null, is `not_a_time`. `_raw` has the bytes of the values that have any, in hex.
+fn add_value_states(e: &Entry, provider_columns: &[String], columns: &mut Vec<(String, Json)>) {
+    for name in provider_columns {
+        if e.value(name).is_none() {
+            columns.push((name.clone(), Json::Null));
+        }
+    }
+    let time_columns = e.kind.map_or(&[][..], Kind::time_columns);
+    let mut states = serde_json::Map::new();
+    let mut raw = serde_json::Map::new();
+    for (output, value) in columns.iter() {
+        let database = match DATABASE_NAMES.iter().find(|(o, _)| o == output) {
+            Some((_, database)) => *database,
+            None if matches!(output.as_str(), "UserId" | "AppId") => output.as_str(),
+            None if e.value(output).is_some() || provider_columns.contains(output) => output,
+            None => continue,
+        };
+        let state = e.state(database).unwrap_or(ValueState::Absent);
+        let is_time = database == "TimeStamp" || time_columns.contains(&database);
+        let name = if state == ValueState::Parsed && is_time && value.is_null() {
+            "not_a_time"
+        } else {
+            state_name(state)
+        };
+        states.insert(output.clone(), json!(name));
+        if let Some(bytes) = e.raw(database) {
+            raw.insert(output.clone(), json!(hex(bytes)));
+        }
+    }
+    columns.push(("_value_state".to_string(), Json::Object(states)));
+    columns.push(("_raw".to_string(), Json::Object(raw)));
+}
+
+/// Bytes in hex, as binary values are written.
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02X}")).collect()
+}
+
 // --- writers ------------------------------------------------------------------------------------
 
 /// One CSV file per provider in `dir` (`NetworkUsages.csv`,
@@ -614,14 +708,14 @@ fn write_entries_to(
     srum: &Srum,
     source: &str,
     output_type: SrumOutputType,
+    value_states: bool,
 ) -> io::Result<()> {
     if let Some(parent) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)?;
     }
-    let mut w = RecordWriter::new(Box::new(BufWriter::new(File::create(path)?)), output_type);
-    for e in &srum.entries {
-        w.entry(e, source)?;
-    }
+    let out = Box::new(BufWriter::new(File::create(path)?));
+    let mut w = RecordWriter::new(out, output_type, value_states);
+    w.database(srum, source)?;
     w.finish()
 }
 
@@ -629,24 +723,45 @@ fn write_entries_to(
 struct RecordWriter {
     out: Box<dyn Write>,
     pretty: bool,
+    /// Add how each value was read and its bytes (`--include-value-state`).
+    value_states: bool,
 }
 
 impl RecordWriter {
-    fn new(out: Box<dyn Write>, output_type: SrumOutputType) -> Self {
+    fn new(out: Box<dyn Write>, output_type: SrumOutputType, value_states: bool) -> Self {
         RecordWriter {
             out,
             pretty: output_type == SrumOutputType::Json,
+            value_states,
         }
     }
 
-    /// One entry: where it comes from, then its columns as in the CSV tables.
-    fn entry(&mut self, e: &Entry, source: &str) -> io::Result<()> {
+    /// Every entry of a database.
+    fn database(&mut self, srum: &Srum, source: &str) -> io::Result<()> {
+        let provider_columns = if self.value_states {
+            provider_columns(srum)
+        } else {
+            HashMap::new()
+        };
+        srum.entries.iter().try_for_each(|e| {
+            let columns = provider_columns.get(&output_name(e)).map(Vec::as_slice);
+            self.entry(e, source, columns.unwrap_or_default())
+        })
+    }
+
+    /// One entry: where it comes from, then its columns as in the CSV tables; with value states,
+    /// its provider's columns its table hasn't (`provider_columns`, as null), how each database
+    /// value was read (`_value_state`) and its bytes (`_raw`).
+    fn entry(&mut self, e: &Entry, source: &str, provider_columns: &[String]) -> io::Result<()> {
         let mut columns = vec![
             ("SourceFile".to_string(), json!(source)),
             ("Table".to_string(), json!(e.table)),
             ("Provider".to_string(), json!(output_name(e))),
         ];
         columns.extend(row(e));
+        if self.value_states {
+            add_value_states(e, provider_columns, &mut columns);
+        }
         // JSON: a pretty object and a newline, like the other commands; JSONL: one per line.
         if self.pretty {
             serde_json::to_writer_pretty(&mut self.out, &Ordered(&columns))?;
@@ -829,6 +944,141 @@ pub fn find_databases(dir: &Path) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use srum::Cell;
+
+    /// An energy usage entry (`LT`: the long-term table) with `columns`: (name, value, state,
+    /// bytes).
+    fn energy(long_term: bool, columns: &[(&str, Value, ValueState, Option<&[u8]>)]) -> Entry {
+        let common = [
+            (
+                "AutoIncId",
+                Value::I32(7),
+                ValueState::Parsed,
+                Some(&[7, 0, 0, 0][..]),
+            ),
+            (
+                "TimeStamp",
+                Value::DateTime(44_630.5),
+                ValueState::Parsed,
+                Some(&[0; 8][..]),
+            ),
+            ("AppId", Value::Null, ValueState::Null, None),
+            ("UserId", Value::Null, ValueState::Null, None),
+        ];
+        let cell = |(name, _, state, raw): &(&str, Value, ValueState, Option<&[u8]>)| Cell {
+            column: (*name).to_string(),
+            state: *state,
+            raw: raw.map(<[u8]>::to_vec),
+        };
+        Entry {
+            table: if long_term {
+                "{FEE4E14F-02A9-4550-B5CE-5FA2DA202E37}LT"
+            } else {
+                "{FEE4E14F-02A9-4550-B5CE-5FA2DA202E37}"
+            }
+            .to_string(),
+            kind: Some(if long_term {
+                Kind::EnergyUsageLongTerm
+            } else {
+                Kind::EnergyUsage
+            }),
+            id: Some(7),
+            time: Time::from_ole_date(44_630.5),
+            app_id: None,
+            app: None,
+            app_kind: None,
+            user_id: None,
+            user: None,
+            user_name: None,
+            profile_name: None,
+            values: columns
+                .iter()
+                .map(|(n, v, ..)| ((*n).to_string(), v.clone()))
+                .collect(),
+            cells: common.iter().chain(columns).map(cell).collect(),
+        }
+    }
+
+    #[test]
+    fn value_states_say_what_a_null_stands_for() {
+        let short = energy(
+            false,
+            &[
+                (
+                    "ChargeLevel",
+                    Value::I32(-1),
+                    ValueState::Parsed,
+                    Some(&[0xFF; 4][..]),
+                ),
+                (
+                    "Blob",
+                    Value::Binary(vec![1]),
+                    ValueState::Unsupported,
+                    Some(&[1][..]),
+                ),
+                (
+                    "Broken",
+                    Value::Null,
+                    ValueState::Damaged,
+                    Some(&[1, 2][..]),
+                ),
+            ],
+        );
+        // EventTimestamp is a FILETIME column: 0 is no time
+        let long = energy(
+            true,
+            &[(
+                "EventTimestamp",
+                Value::I64(0),
+                ValueState::Parsed,
+                Some(&[0; 8][..]),
+            )],
+        );
+        let srum = Srum {
+            entries: vec![short.clone(), long.clone()],
+            ids: Vec::new(),
+            tables: Vec::new(),
+            dirty: false,
+            problems: Vec::new(),
+        };
+        let providers = provider_columns(&srum);
+        assert_eq!(
+            providers["EnergyUsage"],
+            ["ChargeLevel", "Blob", "Broken", "EventTimestamp"]
+        );
+        let states = |e: &Entry| {
+            let mut columns = row(e);
+            add_value_states(e, &providers["EnergyUsage"], &mut columns);
+            columns.into_iter().collect::<HashMap<String, Json>>()
+        };
+        let short = states(&short);
+        let state = &short["_value_state"];
+        assert_eq!(state["Id"], "parsed");
+        assert_eq!(state["AppId"], "database_null");
+        assert_eq!(state["ChargeLevel"], "parsed");
+        assert_eq!(state["Blob"], "unsupported_type");
+        assert_eq!(state["Broken"], "decode_error");
+        // a column of the long-term table only
+        assert_eq!(short["EventTimestamp"], Json::Null);
+        assert_eq!(state["EventTimestamp"], "column_absent");
+        assert!(state.get("IsLt").is_none());
+        assert_eq!(short["_raw"]["ChargeLevel"], "FFFFFFFF");
+        assert_eq!(short["_raw"]["Broken"], "0102");
+        assert!(short["_raw"].get("AppId").is_none());
+        let long = states(&long);
+        assert_eq!(long["EventTimestamp"], Json::Null);
+        assert_eq!(long["_value_state"]["EventTimestamp"], "not_a_time");
+        assert_eq!(long["_value_state"]["ChargeLevel"], "column_absent");
+        assert_eq!(long["_raw"]["EventTimestamp"], "0000000000000000");
+    }
+
+    #[test]
+    fn the_ends_of_the_ranges_are_written_whole() {
+        let text = |v: &Value| serde_json::to_string(&json_value(v)).unwrap();
+        assert_eq!(text(&Value::U64(u64::MAX)), "18446744073709551615");
+        assert_eq!(text(&Value::I64(i64::MIN)), "-9223372036854775808");
+        assert_eq!(text(&Value::U32(u32::MAX)), "4294967295");
+    }
 
     #[test]
     fn database_names() {

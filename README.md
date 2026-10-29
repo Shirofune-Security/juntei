@@ -355,6 +355,9 @@ juntei parse-srum -d triage/ -o srum
 
 # JSON Lines on stdout, for jq
 juntei parse-srum -f SRUDB.dat -t jsonl | jq 'select(.Provider == "NetworkUsages")'
+
+# How each value was read, and its bytes: a NULL in the database told from one that couldn't be read
+juntei parse-srum -f SRUDB.dat -t jsonl --include-value-state | jq '._value_state'
 ```
 
 - CSV output is a directory with one table per provider (`NetworkUsages.csv`,
@@ -375,6 +378,15 @@ juntei parse-srum -f SRUDB.dat -t jsonl | jq 'select(.Provider == "NetworkUsages
   and the `WlanSvc` profiles): `-r`, or found in the same collection (`Windows/System32/config/SOFTWARE`
   next to `sru/`, or a `SOFTWARE` next to the database). A hive that can't be read is reported and
   the entries are written without names.
+- With `--include-value-state` (`-t json` or `jsonl`), each entry also says how each value read from
+  the database was read, in `_value_state`: `parsed`, `database_null` (NULL in the database),
+  `column_absent` (the table has no such column, as the other energy usage table may),
+  `unsupported_type` (a column type with no decoding: its bytes), `decode_error` (stored but not
+  read: damage, also in the summary's problems) or `not_a_time` (a FILETIME column holding 0, a
+  negative number or one past 9999, written as null). `_raw` has the bytes each value was read from,
+  in hex: none for a NULL. `Id`, `Timestamp`, `UserId`, `AppId` and the table's own columns have a
+  state; what is made from them (`ExeInfo`, `Sid`, `InterfaceType`, …) has none. Without the option
+  the output is as before.
 - With `-d`, files named `SRUDB.dat` (or ending in it) are parsed; `-o` is a directory with one
   subdirectory of CSV tables (or one JSON / JSONL file) per database, named after its path.
 - A database left dirty (copied from a running system) is read as it is and reported: changes

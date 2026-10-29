@@ -1749,6 +1749,79 @@ fn srum_json_and_jsonl() {
 }
 
 #[test]
+fn srum_value_states_and_bytes() {
+    let r = run(&[
+        "parse-srum",
+        "-f",
+        SRUM_WIN10,
+        "-t",
+        "jsonl",
+        "--include-value-state",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let entries: Vec<Value> = r
+        .stdout
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(entries.len(), 309);
+    for e in &entries {
+        let states = e["_value_state"].as_object().unwrap();
+        // the database's values, not what is made from them
+        for column in ["Id", "Timestamp", "UserId", "AppId"] {
+            assert_eq!(states[column], "parsed", "{column}");
+        }
+        for made in ["ExeInfo", "Sid", "AppType", "SourceFile"] {
+            assert!(!states.contains_key(made), "{made}");
+        }
+        // the id's bytes: a Long, little-endian
+        let id = i32::try_from(e["Id"].as_i64().unwrap()).unwrap();
+        let hex: String = id
+            .to_le_bytes()
+            .iter()
+            .map(|b| format!("{b:02X}"))
+            .collect();
+        assert_eq!(e["_raw"]["Id"], hex);
+    }
+    // a NULL in the database: null, no bytes
+    let timeline = entries
+        .iter()
+        .find(|e| e["Provider"] == "AppTimelineProvider" && e["AudioInS"].is_null())
+        .unwrap();
+    assert_eq!(timeline["_value_state"]["AudioInS"], "database_null");
+    assert!(timeline["_raw"].get("AudioInS").is_none());
+    let nulls = entries
+        .iter()
+        .flat_map(|e| e["_value_state"].as_object().unwrap().values())
+        .filter(|s| *s == "database_null")
+        .count();
+    assert_eq!(nulls, 4333);
+
+    // not asked for: as before
+    let r = run(&["parse-srum", "-f", SRUM_WIN10, "-t", "jsonl"]);
+    assert!(!r.stdout.contains("_value_state"));
+    assert!(!r.stdout.contains("_raw"));
+    // a CSV cell can't say it
+    let dir = tempfile::tempdir().unwrap();
+    let r = run(&[
+        "parse-srum",
+        "-f",
+        SRUM_WIN10,
+        "-o",
+        dir.path().join("csv").to_str().unwrap(),
+        "--include-value-state",
+        "-K",
+    ]);
+    assert_eq!(r.code, 1);
+    assert!(
+        r.stdout
+            .contains("--include-value-state needs -t json or jsonl"),
+        "{}",
+        r.stdout
+    );
+}
+
+#[test]
 fn srum_triage_directory_with_server_tables() {
     let dir = tempfile::tempdir().unwrap();
     let host1 = dir.path().join("HOST1/C/Windows/System32");

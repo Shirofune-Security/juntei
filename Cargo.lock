@@ -1284,7 +1284,7 @@ source = "git+https://github.com/Yamato-Security/ys-shimcache-parser#2a46493ce47
 [[package]]
 name = "ys-srum-parser"
 version = "1.0.0"
-source = "git+https://github.com/Yamato-Security/ys-srum-parser#f94fe6de5dfa427ada0b6f3656386333a8b32f3d"
+source = "git+https://github.com/Yamato-Security/ys-srum-parser?branch=ys%2Fvalue-states#c394a633999f9152c41a73bb22c8f177ba067e83"
 dependencies = [
  "ys-srum-parser-ese",
 ]
@@ -1292,7 +1292,7 @@ dependencies = [
 [[package]]
 name = "ys-srum-parser-ese"
 version = "1.0.0"
-source = "git+https://github.com/Yamato-Security/ys-srum-parser#f94fe6de5dfa427ada0b6f3656386333a8b32f3d"
+source = "git+https://github.com/Yamato-Security/ys-srum-parser?branch=ys%2Fvalue-states#c394a633999f9152c41a73bb22c8f177ba067e83"
 
 [[package]]
 name = "ys-usn-journal-parser"

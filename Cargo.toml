@@ -49,7 +49,8 @@ shimcache-forensic = { package = "ys-shimcache-parser", git = "https://github.co
 serde = { version = "1", features = ["derive"] }
 # SRUM parsing: Yamato Security's ys-srum-parser, a fork of Sootmark's ese and srum crates
 # (MIT OR Apache-2.0).
-srum = { package = "ys-srum-parser", git = "https://github.com/Yamato-Security/ys-srum-parser" }
+# Until Yamato-Security/ys-srum-parser#9 (value states and bytes) is merged: its branch.
+srum = { package = "ys-srum-parser", git = "https://github.com/Yamato-Security/ys-srum-parser", branch = "ys/value-states" }
 termcolor = "1"
 # Defender quarantine parsing: Yamato Security's ys-defender-history-parser, a fork of
 # sootmark-defender (MIT OR Apache-2.0).
