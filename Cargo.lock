@@ -620,6 +620,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shimcache-forensic",
+ "sootmark-defender",
  "sootmark-shell",
  "sootmark-srum",
  "sootmark-usn",
@@ -937,6 +938,20 @@ name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
+
+[[package]]
+name = "sootmark-common"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16039a30e3d12a335537236722ba00a8da0b5dfdfcf20785b75dea78f523160e"
+
+[[package]]
+name = "sootmark-defender"
+version = "0.3.0"
+source = "git+https://github.com/Yamato-Security/ys-defender-history-parser?rev=599ab7ab15444aecf61efcd1c1402a151df944b9#599ab7ab15444aecf61efcd1c1402a151df944b9"
+dependencies = [
+ "sootmark-common",
+]
 
 [[package]]
 name = "sootmark-ese"

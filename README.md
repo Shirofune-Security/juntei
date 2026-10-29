@@ -16,6 +16,7 @@ not event logs.
 | Shortcuts (`*.lnk`) | `parse-lnk` | Supported |
 | Jump lists (`*.automaticDestinations-ms`, `*.customDestinations-ms`) | `parse-jump-lists` | Supported |
 | ShimCache / AppCompatCache (`SYSTEM` hive) | `parse-shimcache` | Supported |
+| Microsoft Defender quarantine (`Quarantine\Entries`, `ResourceData`, `Resources`) | `parse-defender-quarantine` | Supported |
 | More Windows artifacts | | Planned |
 
 ## Build
@@ -588,6 +589,80 @@ of Security Ronin's [shimcache-forensic](https://github.com/SecurityRonin/shimca
 `SYSTEM` hives (24 control sets, 7,290 entries) and 17 AppCompatCache values it was compared on,
 every entry has the path, time, execution flag, flags and position Eric Zimmerman's
 AppCompatCacheParser 2026.10.1 gives it.
+
+### `parse-defender-quarantine`
+
+Parses Microsoft Defender's quarantine (`ProgramData\Microsoft\Windows Defender\Quarantine`): what
+Defender quarantined, for which threat and when, and the quarantined files themselves, decrypted in
+memory and never run: their hashes, owner and where they were downloaded from. Defender keeps
+the quarantine after the event logs have rolled over, and the files' hashes link a detection to
+the rest of an investigation.
+
+```
+Input:
+  -d, --directory <DIR>  Directory to search recursively for Defender quarantine folders (a volume, a Quarantine folder, a collection of hosts)
+  -f, --file <FILE>      File path to one quarantine entry (Quarantine\Entries\{GUID})
+
+Output:
+  -o, --output <FILE>       Save every record to a file
+  -t, --output-type <TYPE>  Output type: csv (default), json, jsonl. Without -o, the records are written to stdout
+      --extract <DIR>       Write the quarantined files (likely malware, never run) to this directory, named by their SHA-1
+  -C, --clobber             Overwrite files when saving or extracting
+
+Display Settings:
+  -K, --no-color  Disable color output
+  -q, --quiet     Quiet mode: do not display the launch banner
+```
+
+```
+# Folders, entries, resources, threats and problems on the terminal
+juntei parse-defender-quarantine -d C/ProgramData/Microsoft/Windows\ Defender/Quarantine
+
+# One CSV row per resource for every host of a triage collection
+juntei parse-defender-quarantine -d triage/ -o quarantine.csv
+
+# Every field and stream as JSON Lines
+juntei parse-defender-quarantine -d triage/ -t jsonl | jq .
+
+# The quarantined files too, on an isolated analysis system
+juntei parse-defender-quarantine -d triage/ -o quarantine.csv --extract quarantined/
+```
+
+- An entry (`Entries\{GUID}`; the GUID is also the detection history's quarantine ID) gives the
+  threat's name and identifier, the scan, the time of the quarantine and every resource it
+  quarantined: files, registry keys, services, startup items, scheduled tasks. Each resource is
+  matched with its content (`ResourceData\<xx>\<SHA-1>`) and resource record
+  (`Resources\<xx>\<SHA-1>`).
+- A file's content is what Windows' `BackupRead` gives: its data (the quarantined file), its
+  security descriptor (the `Owner` SID) and its alternate data streams (`Zone.Identifier`:
+  `ZoneId`, `ReferrerUrl`, `HostUrl`). A registry key's or service's content is a registry hive.
+  `MD5`, `SHA1` and `SHA256` are those of the quarantined file (or hive), computed from the bytes
+  recovered.
+- One record per resource. CSV columns: `Record` (`resource`; `entry` for an entry without
+  resources; `orphan-content` and `orphan-record` for contents and resource records no entry
+  holds), `QuarantineTime`, `ThreatName`, `ThreatId`, `ResourceType`, `Path`, `PhysicalPath`,
+  `FileSize`, `CreationTime`, `LastAccessTime`, `LastWriteTime`, `Attributes`, `Owner`, `ZoneId`,
+  `ReferrerUrl`, `HostUrl`, `ContentSize`, `MD5`, `SHA1`, `SHA256`, `Streams`, `ResourceId`,
+  `EntryId`, `ScanId`, `QuarantineFolder` (which host), `EntryFile`, `ContentFile`,
+  `ResourceRecordFile`, `ExtractedFile` and `Problems`. Times are UTC (RFC 3339). JSON / JSONL
+  have every field of the resource (with its identifier and type), every stream and the entries a
+  resource record lists.
+- Everything Defender stores is checked: each header's sizes and CRC-32s, a content's SHA-1
+  against its name, the file's size against its data, an entry's identifier against its file
+  name, a resource record's size and entries. A content that is missing, changed or damaged, or
+  that no entry holds, is reported in `Problems`, and the rest is read.
+- `--extract <DIR>` writes the quarantined files out: likely malware, so only when asked, with a
+  warning, on an isolated analysis system. Each is named by its SHA-1 (`<SHA-1>.bin`, a hive
+  `<SHA-1>.hive`; beside it `<SHA-1>.security` and its alternate data streams, such as
+  `<SHA-1>.Zone.Identifier`), created without execute permission. A file already there with the
+  same bytes is left as it is; one holding something else is not overwritten unless `-C` is given.
+  Nothing is ever run.
+
+Quarantine parsing comes from Yamato Security's
+[ys-defender-history-parser](https://github.com/Yamato-Security/ys-defender-history-parser), a
+maintained fork of Sootmark's [defender](https://github.com/Sootmark/defender) crate (MIT OR
+Apache-2.0) that reads Defender's detection history, protection logs and quarantine. A quarantine
+folder it writes as Defender writes them is read the same by dissect.target's quarantine reader.
 
 ## License
 

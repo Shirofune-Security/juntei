@@ -3,3 +3,5 @@
 *.gz binary
 *.bin binary
 *.raw binary
+# Defender quarantine parts: encrypted bytes, whatever their name
+test_files/defender_quarantine/Quarantine/** binary

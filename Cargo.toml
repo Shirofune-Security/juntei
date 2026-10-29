@@ -50,6 +50,9 @@ serde = { version = "1", features = ["derive"] }
 # (MIT OR Apache-2.0), pinned to a commit.
 srum = { package = "sootmark-srum", git = "https://github.com/Yamato-Security/ys-srum-parser", rev = "451e1d445c635be0b23fad374c0efa2bc1c296ea" }
 termcolor = "1"
+# Defender quarantine parsing: Yamato Security's ys-defender-history-parser, a fork of
+# sootmark-defender (MIT OR Apache-2.0), pinned to a commit.
+defender = { package = "sootmark-defender", git = "https://github.com/Yamato-Security/ys-defender-history-parser", rev = "599ab7ab15444aecf61efcd1c1402a151df944b9" }
 
 [dev-dependencies]
 # The SYSTEM hive of test_files/shimcache/ is kept gzipped.
