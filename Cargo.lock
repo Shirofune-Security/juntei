@@ -9,28 +9,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
-name = "amcache-core"
-version = "0.2.0"
-source = "git+https://github.com/Yamato-Security/ys-amcache-parser?rev=3bfc944a9b5c4c46b94bda12ca6b9af9f83c255a#3bfc944a9b5c4c46b94bda12ca6b9af9f83c255a"
-dependencies = [
- "winreg-core",
-]
-
-[[package]]
-name = "amcache-forensic"
-version = "0.2.0"
-source = "git+https://github.com/Yamato-Security/ys-amcache-parser?rev=3bfc944a9b5c4c46b94bda12ca6b9af9f83c255a#3bfc944a9b5c4c46b94bda12ca6b9af9f83c255a"
-dependencies = [
- "amcache-core",
- "csv",
- "forensicnomicon",
- "same-file",
- "serde",
- "serde_json",
- "winreg-core",
-]
-
-[[package]]
 name = "android_system_properties"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -422,15 +400,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "frnsc-prefetch"
-version = "0.14.0"
-source = "git+https://github.com/Yamato-Security/ys-prefetch-parser?rev=ef0ef23f649334981d28b8d76eb1608e6f69fbec#ef0ef23f649334981d28b8d76eb1608e6f69fbec"
-dependencies = [
- "crc32fast",
- "forensic-rs",
-]
-
-[[package]]
 name = "futures-core"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -607,26 +576,26 @@ dependencies = [
 name = "juntei"
 version = "1.0.0"
 dependencies = [
- "amcache-forensic",
  "bytesize",
  "chrono",
  "clap",
  "csv",
  "flate2",
  "forensicnomicon",
- "frnsc-prefetch",
  "indicatif",
- "mft",
  "serde",
  "serde_json",
- "shimcache-forensic",
- "sootmark-defender",
- "sootmark-shell",
- "sootmark-srum",
- "sootmark-usn",
  "tempfile",
  "termcolor",
- "ys-jump-lists",
+ "ys-amcache-parser",
+ "ys-defender-history-parser",
+ "ys-jump-lists-parser",
+ "ys-lnk-parser",
+ "ys-mft-parser",
+ "ys-prefetch-parser",
+ "ys-shimcache-parser",
+ "ys-srum-parser",
+ "ys-usn-journal-parser",
 ]
 
 [[package]]
@@ -669,27 +638,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6b0ca1155a9ecc25aa12e8313a119f32edf0255fea2f44839c4ac0a12b2ac157"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "mft"
-version = "0.9.0"
-source = "git+https://github.com/Yamato-Security/ys-mft-parser?rev=9398de862b6ba716c1a4a25d9566c77273063ce8#9398de862b6ba716c1a4a25d9566c77273063ce8"
-dependencies = [
- "bitflags 2.13.2",
- "byteorder",
- "csv",
- "itertools",
- "jiff",
- "log",
- "lru",
- "num-derive 0.5.1",
- "num-traits",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "utf16-simd",
- "winstructs",
 ]
 
 [[package]]
@@ -902,20 +850,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "shimcache-core"
-version = "0.2.0"
-source = "git+https://github.com/Yamato-Security/ys-shimcache-parser?rev=10c6ff14a8be8cafcf45f9cd8b5c111fa8b1a4c5#10c6ff14a8be8cafcf45f9cd8b5c111fa8b1a4c5"
-
-[[package]]
-name = "shimcache-forensic"
-version = "0.2.0"
-source = "git+https://github.com/Yamato-Security/ys-shimcache-parser?rev=10c6ff14a8be8cafcf45f9cd8b5c111fa8b1a4c5#10c6ff14a8be8cafcf45f9cd8b5c111fa8b1a4c5"
-dependencies = [
- "forensicnomicon",
- "shimcache-core",
-]
-
-[[package]]
 name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -944,44 +878,6 @@ name = "sootmark-common"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "16039a30e3d12a335537236722ba00a8da0b5dfdfcf20785b75dea78f523160e"
-
-[[package]]
-name = "sootmark-defender"
-version = "0.3.0"
-source = "git+https://github.com/Yamato-Security/ys-defender-history-parser?rev=599ab7ab15444aecf61efcd1c1402a151df944b9#599ab7ab15444aecf61efcd1c1402a151df944b9"
-dependencies = [
- "sootmark-common",
-]
-
-[[package]]
-name = "sootmark-ese"
-version = "0.2.0"
-source = "git+https://github.com/Yamato-Security/ys-srum-parser?rev=451e1d445c635be0b23fad374c0efa2bc1c296ea#451e1d445c635be0b23fad374c0efa2bc1c296ea"
-
-[[package]]
-name = "sootmark-shell"
-version = "0.4.0"
-source = "git+https://github.com/Yamato-Security/ys-lnk-parser?rev=6c49bc9b80a992dd5155b406dd83d055d311445c#6c49bc9b80a992dd5155b406dd83d055d311445c"
-dependencies = [
- "codepage",
- "encoding_rs",
-]
-
-[[package]]
-name = "sootmark-srum"
-version = "0.2.0"
-source = "git+https://github.com/Yamato-Security/ys-srum-parser?rev=451e1d445c635be0b23fad374c0efa2bc1c296ea#451e1d445c635be0b23fad374c0efa2bc1c296ea"
-dependencies = [
- "sootmark-ese",
-]
-
-[[package]]
-name = "sootmark-usn"
-version = "0.2.0"
-source = "git+https://github.com/Yamato-Security/ys-usn-journal-parser?rev=4630df5acbca0e2476b595f7c38c93e082bead9e#4630df5acbca0e2476b595f7c38c93e082bead9e"
-dependencies = [
- "mft",
-]
 
 [[package]]
 name = "strsim"
@@ -1295,11 +1191,115 @@ dependencies = [
 ]
 
 [[package]]
-name = "ys-jump-lists"
-version = "0.1.0"
-source = "git+https://github.com/Yamato-Security/ys-jump-lists-parser?rev=0df5316f1687b14e330d7d64d644221f9a43f24e#0df5316f1687b14e330d7d64d644221f9a43f24e"
+name = "ys-amcache-parser"
+version = "1.0.0"
+source = "git+https://github.com/Yamato-Security/ys-amcache-parser#023337f17f77dabfc2a7f50f1fd9ca65a964cb93"
 dependencies = [
- "sootmark-shell",
+ "csv",
+ "forensicnomicon",
+ "same-file",
+ "serde",
+ "serde_json",
+ "winreg-core",
+ "ys-amcache-parser-core",
+]
+
+[[package]]
+name = "ys-amcache-parser-core"
+version = "1.0.0"
+source = "git+https://github.com/Yamato-Security/ys-amcache-parser#023337f17f77dabfc2a7f50f1fd9ca65a964cb93"
+dependencies = [
+ "winreg-core",
+]
+
+[[package]]
+name = "ys-defender-history-parser"
+version = "1.0.0"
+source = "git+https://github.com/Yamato-Security/ys-defender-history-parser#fe68e2ce9c4a4b72bc14e33dbea511a12b015e63"
+dependencies = [
+ "sootmark-common",
+]
+
+[[package]]
+name = "ys-jump-lists-parser"
+version = "1.0.0"
+source = "git+https://github.com/Yamato-Security/ys-jump-lists-parser#39ee7120d8fdda2dd13a1039de4fab139b1f1974"
+dependencies = [
+ "ys-lnk-parser",
+]
+
+[[package]]
+name = "ys-lnk-parser"
+version = "1.0.0"
+source = "git+https://github.com/Yamato-Security/ys-lnk-parser#cca62c289273d9e4f6717ae34c07a3326c0e57ad"
+dependencies = [
+ "codepage",
+ "encoding_rs",
+]
+
+[[package]]
+name = "ys-mft-parser"
+version = "1.0.0"
+source = "git+https://github.com/Yamato-Security/ys-mft-parser#c4796f95256eccc29a6c76c3bda071c2a8f560a7"
+dependencies = [
+ "bitflags 2.13.2",
+ "byteorder",
+ "csv",
+ "itertools",
+ "jiff",
+ "log",
+ "lru",
+ "num-derive 0.5.1",
+ "num-traits",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "utf16-simd",
+ "winstructs",
+]
+
+[[package]]
+name = "ys-prefetch-parser"
+version = "1.0.0"
+source = "git+https://github.com/Yamato-Security/ys-prefetch-parser#ae8067b675f7f612ef9b792348a2f42aca6d2e6f"
+dependencies = [
+ "crc32fast",
+ "forensic-rs",
+]
+
+[[package]]
+name = "ys-shimcache-parser"
+version = "1.0.0"
+source = "git+https://github.com/Yamato-Security/ys-shimcache-parser#2a46493ce47519cc608fedd4a85368f46aac2bf6"
+dependencies = [
+ "forensicnomicon",
+ "ys-shimcache-parser-core",
+]
+
+[[package]]
+name = "ys-shimcache-parser-core"
+version = "1.0.0"
+source = "git+https://github.com/Yamato-Security/ys-shimcache-parser#2a46493ce47519cc608fedd4a85368f46aac2bf6"
+
+[[package]]
+name = "ys-srum-parser"
+version = "1.0.0"
+source = "git+https://github.com/Yamato-Security/ys-srum-parser#f94fe6de5dfa427ada0b6f3656386333a8b32f3d"
+dependencies = [
+ "ys-srum-parser-ese",
+]
+
+[[package]]
+name = "ys-srum-parser-ese"
+version = "1.0.0"
+source = "git+https://github.com/Yamato-Security/ys-srum-parser#f94fe6de5dfa427ada0b6f3656386333a8b32f3d"
+
+[[package]]
+name = "ys-usn-journal-parser"
+version = "1.0.0"
+source = "git+https://github.com/Yamato-Security/ys-usn-journal-parser#bf2f91d41eab0682e2b981f3308bb4c8f458043c"
+dependencies = [
+ "ys-mft-parser",
 ]
 
 [[package]]
