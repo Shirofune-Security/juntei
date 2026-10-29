@@ -11,6 +11,7 @@ mod mft;
 mod mft_csv;
 mod prefetch;
 mod progress;
+mod registry;
 mod shimcache;
 mod srum;
 mod usn_journal;
@@ -132,6 +133,17 @@ fn main() {
                 display_logo(opts.common.quiet, opts.common.no_color, true, false);
             }
             let code = shimcache::run(opts);
+            if !data_only {
+                print_elapsed(start, opts.common.no_color);
+            }
+            code
+        }
+        Commands::ParseRegistry(opts) => {
+            let data_only = opts.data_on_stdout();
+            if !data_only {
+                display_logo(opts.common.quiet, opts.common.no_color, true, false);
+            }
+            let code = registry::run(opts);
             if !data_only {
                 print_elapsed(start, opts.common.no_color);
             }

@@ -1,7 +1,7 @@
-//! A small reader of registry hive files (REGF) for the few keys and values Juntei reads from
-//! them (the SOFTWARE hive's account and Wi-Fi names for `parse-srum`). Every offset, count and
-//! length is checked against the file, and the cells read are counted: a damaged or crafted
-//! hive gives errors, never a panic, a hang or an allocation larger than the file.
+//! A reader of registry hive files (REGF): the SOFTWARE hive's account and Wi-Fi names for
+//! `parse-srum`, and every key and value for `parse-registry`. Every offset, count and length is
+//! checked against the file, and the cells read are counted: a damaged or crafted hive gives
+//! errors, never a panic, a hang or an allocation larger than the file.
 
 use std::cell::Cell;
 use std::path::Path;
@@ -51,6 +51,13 @@ impl Hive {
         Key::at(self, self.root)
     }
 
+    /// The name the base block records for the hive (the end of its path,
+    /// `\??\C:\Windows\System32\config\SYSTEM` or `emRoot\System32\Config\SOFTWARE`), its last
+    /// component.
+    pub fn base_name(&self) -> String {
+        base_name(&self.data)
+    }
+
     /// The key at `path` (`Microsoft\Windows NT\CurrentVersion`, names in any case) under the
     /// root key.
     pub fn open(&self, path: &str) -> Result<Option<Key<'_>>> {
@@ -62,6 +69,20 @@ impl Hive {
             }
         }
         Ok(Some(key))
+    }
+
+    /// The key at `path`, like [`Hive::open`], but found among the subkeys that can be read: a
+    /// damaged sibling doesn't hide it.
+    pub fn find(&self, path: &str) -> Option<Key<'_>> {
+        let mut key = self.root().ok()?;
+        for part in path.split('\\').filter(|p| !p.is_empty()) {
+            key = key
+                .subkeys_and_problems()
+                .0
+                .into_iter()
+                .find(|k| same_name(&k.name(), part))?;
+        }
+        Some(key)
     }
 
     /// The data of the cell at `offset` (from the first hive bin), after its size.
@@ -97,6 +118,7 @@ impl Hive {
 pub struct Key<'h> {
     hive: &'h Hive,
     cell: &'h [u8],
+    offset: u32,
 }
 
 impl<'h> Key<'h> {
@@ -105,7 +127,73 @@ impl<'h> Key<'h> {
         if cell.len() < NK_FIXED || &cell[..2] != b"nk" {
             return Err(format!("cell {offset:#x} is not a key"));
         }
-        Ok(Key { hive, cell })
+        Ok(Key { hive, cell, offset })
+    }
+
+    /// Where its cell is in the hive bins: the same key listed twice has the same one.
+    pub fn offset(&self) -> u32 {
+        self.offset
+    }
+
+    /// When it was last written (a FILETIME).
+    pub fn last_written(&self) -> u64 {
+        u64_at(self.cell, 4).unwrap_or(0)
+    }
+
+    /// The subkeys that can be read, and what keeps the others from being read: a damaged
+    /// subkey or list doesn't hide the rest.
+    pub fn subkeys_and_problems(&self) -> (Vec<Key<'h>>, Vec<String>) {
+        let count = u32_at(self.cell, 20).unwrap_or(0);
+        let list = u32_at(self.cell, 28).unwrap_or(u32::MAX);
+        let mut problems = Vec::new();
+        if count == 0 || list == u32::MAX {
+            return (Vec::new(), problems);
+        }
+        let limit = (count as usize).min(self.hive.data.len() / NK_FIXED);
+        let mut offsets = Vec::new();
+        if let Err(e) = self.collect_subkeys(list, true, limit, &mut offsets) {
+            problems.push(e);
+        }
+        if offsets.len() < count as usize {
+            problems.push(format!(
+                "{} of its {count} subkeys are listed",
+                offsets.len()
+            ));
+        }
+        let mut keys = Vec::new();
+        for offset in offsets {
+            match Key::at(self.hive, offset) {
+                Ok(key) => keys.push(key),
+                Err(e) => problems.push(format!("a subkey: {e}")),
+            }
+        }
+        (keys, problems)
+    }
+
+    /// The values that can be read, and what keeps the others from being read.
+    pub fn values_and_problems(&self) -> (Vec<Value<'h>>, Vec<String>) {
+        let count = u32_at(self.cell, 36).unwrap_or(0) as usize;
+        let list = u32_at(self.cell, 40).unwrap_or(u32::MAX);
+        if count == 0 || list == u32::MAX {
+            return (Vec::new(), Vec::new());
+        }
+        let cell = match self.hive.cell(list) {
+            Ok(cell) => cell,
+            Err(e) => return (Vec::new(), vec![format!("its value list: {e}")]),
+        };
+        let mut problems = Vec::new();
+        let listed = (cell.len() / 4).min(count);
+        if listed < count {
+            problems.push(format!("{listed} of its {count} values are listed"));
+        }
+        let mut values = Vec::new();
+        for entry in cell[..listed * 4].as_chunks::<4>().0 {
+            match Value::at(self.hive, u32::from_le_bytes(*entry)) {
+                Ok(value) => values.push(value),
+                Err(e) => problems.push(format!("a value: {e}")),
+            }
+        }
+        (values, problems)
     }
 
     /// The key's name (ASCII when flagged so, otherwise UTF-16); what fits in the cell.
@@ -217,6 +305,16 @@ impl<'h> Value<'h> {
         Ok(Value { hive, cell })
     }
 
+    /// The size of its data, as it records it.
+    pub fn size(&self) -> usize {
+        (u32_at(self.cell, 4).unwrap_or(0) & 0x7fff_ffff) as usize
+    }
+
+    /// Its type (`REG_SZ` is 1, `REG_DWORD` 4).
+    pub fn data_type(&self) -> u32 {
+        u32_at(self.cell, 12).unwrap_or(0)
+    }
+
     pub fn name(&self) -> String {
         let length = usize::from(u16_at(self.cell, 2).unwrap_or(0));
         let flags = u16_at(self.cell, 16).unwrap_or(0);
@@ -291,6 +389,28 @@ fn u16_at(b: &[u8], at: usize) -> Option<u16> {
 fn u32_at(b: &[u8], at: usize) -> Option<u32> {
     b.get(at..at + 4)
         .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+}
+
+fn u64_at(b: &[u8], at: usize) -> Option<u64> {
+    b.get(at..at + 8)
+        .and_then(|b| b.try_into().ok())
+        .map(u64::from_le_bytes)
+}
+
+/// Whether a hive's base block says it is dirty: its two sequence numbers differ (Windows
+/// hadn't finished writing it).
+pub fn is_dirty(data: &[u8]) -> bool {
+    u32_at(data, 4) != u32_at(data, 8)
+}
+
+/// The last component of the path the base block records for the hive (UTF-16, 64 bytes at 48).
+pub fn base_name(data: &[u8]) -> String {
+    let path = text(data.get(48..112).unwrap_or_default(), false);
+    let path = path.split('\0').next().unwrap_or_default();
+    path.rsplit(['\\', '/'])
+        .next()
+        .unwrap_or_default()
+        .to_string()
 }
 
 /// A name: one byte per character (Latin-1) or UTF-16.

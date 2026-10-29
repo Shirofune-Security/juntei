@@ -112,6 +112,16 @@ pub enum Commands {
         disable_version_flag = true
     )]
     ParseDefenderQuarantine(DefenderQuarantineOptions),
+
+    /// Parse registry hives: every key and value, with last-write times, types and data; dirty hives replayed with their transaction logs
+    #[command(
+        author = AUTHOR,
+        version = VERSION,
+        help_template = "\nVersion: {version}\n{author-with-newline}\n{usage-heading}\n  juntei parse-registry <INPUT> [OPTIONS]\n\n{all-args}",
+        disable_help_flag = true,
+        disable_version_flag = true
+    )]
+    ParseRegistry(RegistryOptions),
 }
 
 #[derive(Args, Clone, Debug, Default)]
@@ -745,6 +755,91 @@ impl DefenderQuarantineOptions {
     pub fn output_type(&self) -> DefenderQuarantineOutputType {
         self.output_type
             .unwrap_or(DefenderQuarantineOutputType::Csv)
+    }
+
+    /// Records on stdout (`-t` without `-o`): nothing but the data may be printed there.
+    pub fn data_on_stdout(&self) -> bool {
+        self.output.is_none() && self.output_type.is_some()
+    }
+}
+
+/// What `parse-registry` writes.
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RegistryOutputType {
+    /// One row per value, and per key without values or with damage
+    Csv,
+    /// One pretty-printed JSON object per record
+    Json,
+    /// One JSON object per line
+    Jsonl,
+}
+
+#[derive(Args, Clone, Debug, Default)]
+#[clap(group(ArgGroup::new("input").args(["directory", "filepath"]).required(true).multiple(false)))]
+pub struct RegistryOptions {
+    /// Directory to search recursively for registry hives (every file that is one, logs aside)
+    #[arg(help_heading = Some("Input"), short = 'd', long, value_name = "DIR", display_order = 100)]
+    pub directory: Option<PathBuf>,
+
+    /// File path to one registry hive
+    #[arg(help_heading = Some("Input"), short = 'f', long = "file", value_name = "FILE", display_order = 101)]
+    pub filepath: Option<PathBuf>,
+
+    /// A transaction log of the hive given with -f, once per log (default: <hive>.LOG, .LOG1 and .LOG2 next to it)
+    #[arg(help_heading = Some("Input"), long = "log", value_name = "FILE", conflicts_with_all = ["directory", "no_logs"], display_order = 102)]
+    pub logs: Vec<PathBuf>,
+
+    /// Read a dirty hive as it is, without its transaction logs
+    #[arg(help_heading = Some("Input"), long = "no-logs", display_order = 103)]
+    pub no_logs: bool,
+
+    /// Only this key (its path under the hive's root key, ex: Microsoft\Windows\CurrentVersion\Group Policy\State) and the keys under it
+    #[arg(help_heading = Some("Filtering"), short = 'k', long, value_name = "PATH", display_order = 200)]
+    pub key: Option<String>,
+
+    /// Only keys whose path matches REGEX (ignoring case)
+    #[arg(help_heading = Some("Filtering"), long, value_name = "REGEX", display_order = 201)]
+    pub key_regex: Option<String>,
+
+    /// Only values whose name matches REGEX (ignoring case; the default value's name is empty)
+    #[arg(help_heading = Some("Filtering"), long, value_name = "REGEX", display_order = 202)]
+    pub value_name: Option<String>,
+
+    /// Only values whose data, as written, matches REGEX (ignoring case, so a GUID matches in any case)
+    #[arg(help_heading = Some("Filtering"), long, value_name = "REGEX", display_order = 203)]
+    pub value_data: Option<String>,
+
+    /// Only keys last written on or after DATE, in UTC unless an offset is given (ex: 2025-10-19, 2025-10-19T13:45:30Z)
+    #[arg(help_heading = Some("Filtering"), long, value_name = "DATE", value_parser = crate::mft_csv::parse_cutoff, display_order = 204)]
+    pub timeline_start: Option<i64>,
+
+    /// Only keys last written on or before DATE
+    #[arg(help_heading = Some("Filtering"), long, value_name = "DATE", value_parser = crate::mft_csv::parse_cutoff, display_order = 205)]
+    pub timeline_end: Option<i64>,
+
+    /// Save every record to a file
+    #[arg(help_heading = Some("Output"), short = 'o', long, value_name = "FILE", display_order = 300)]
+    pub output: Option<PathBuf>,
+
+    /// Output type: csv (default), json, jsonl. Without -o, the records are written to stdout
+    #[arg(help_heading = Some("Output"), short = 't', long = "output-type", value_name = "TYPE", value_enum, hide_possible_values = true, display_order = 301)]
+    pub output_type: Option<RegistryOutputType>,
+
+    /// Write every value's bytes in hex (ValueDataRaw), not only those that don't decode as their type
+    #[arg(help_heading = Some("Output"), long, display_order = 302)]
+    pub raw_data: bool,
+
+    /// Overwrite files when saving
+    #[arg(help_heading = Some("Output"), short = 'C', long, requires = "output", display_order = 303)]
+    pub clobber: bool,
+
+    #[clap(flatten)]
+    pub common: CommonOptions,
+}
+
+impl RegistryOptions {
+    pub fn output_type(&self) -> RegistryOutputType {
+        self.output_type.unwrap_or(RegistryOutputType::Csv)
     }
 
     /// Records on stdout (`-t` without `-o`): nothing but the data may be printed there.

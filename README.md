@@ -17,6 +17,7 @@ not event logs.
 | Jump lists (`*.automaticDestinations-ms`, `*.customDestinations-ms`) | `parse-jump-lists` | Supported |
 | ShimCache / AppCompatCache (`SYSTEM` hive) | `parse-shimcache` | Supported |
 | Microsoft Defender quarantine (`Quarantine\Entries`, `ResourceData`, `Resources`) | `parse-defender-quarantine` | Supported |
+| Registry hives (`SYSTEM`, `SOFTWARE`, `NTUSER.DAT`, …), with their transaction logs | `parse-registry` | Supported |
 | More Windows artifacts | | Planned |
 
 ## Build
@@ -659,6 +660,98 @@ Quarantine parsing comes from Yamato Security's
 maintained fork of Sootmark's [defender](https://github.com/Sootmark/defender) crate (MIT OR
 Apache-2.0) that reads Defender's detection history, protection logs and quarantine. A quarantine
 folder it writes as Defender writes them is read the same by dissect.target's quarantine reader.
+
+### `parse-registry`
+
+Parses registry hives (`SYSTEM`, `SOFTWARE`, `SAM`, `SECURITY`, `NTUSER.DAT`, `UsrClass.dat`,
+`Amcache.hve`, …): every key with its last-write time and every value with its type and data. A
+dirty hive (one Windows had not finished writing) is read with its transaction logs applied, and
+each record says whether they changed it. Filters keep a targeted question, such as the state of
+Group Policy or the control set in use, from writing the whole hive.
+
+```
+Input:
+  -d, --directory <DIR>  Directory to search recursively for registry hives (every file that is one, logs aside)
+  -f, --file <FILE>      File path to one registry hive
+      --log <FILE>       A transaction log of the hive given with -f, once per log (default: <hive>.LOG, .LOG1 and .LOG2 next to it)
+      --no-logs          Read a dirty hive as it is, without its transaction logs
+
+Filtering:
+  -k, --key <PATH>             Only this key (its path under the hive's root key, ex: Microsoft\Windows\CurrentVersion\Group Policy\State) and the keys under it
+      --key-regex <REGEX>      Only keys whose path matches REGEX (ignoring case)
+      --value-name <REGEX>     Only values whose name matches REGEX (ignoring case; the default value's name is empty)
+      --value-data <REGEX>     Only values whose data, as written, matches REGEX (ignoring case, so a GUID matches in any case)
+      --timeline-start <DATE>  Only keys last written on or after DATE, in UTC unless an offset is given (ex: 2025-10-19, 2025-10-19T13:45:30Z)
+      --timeline-end <DATE>    Only keys last written on or before DATE
+
+Output:
+  -o, --output <FILE>       Save every record to a file
+  -t, --output-type <TYPE>  Output type: csv (default), json, jsonl. Without -o, the records are written to stdout
+      --raw-data            Write every value's bytes in hex (ValueDataRaw), not only those that don't decode as their type
+  -C, --clobber             Overwrite files when saving
+
+General Options:
+  -h, --help  Show the help menu
+
+Display Settings:
+  -K, --no-color  Disable color output
+  -q, --quiet     Quiet mode: do not display the launch banner
+```
+
+```
+# Every key and value of a hive as CSV, its .LOG1 / .LOG2 applied when it is dirty
+juntei parse-registry -f C/Windows/System32/config/SOFTWARE -o software.csv
+
+# Every hive of a triage collection
+juntei parse-registry -d triage/ -o registry.csv
+
+# Group Policy's state: the GPO links of the machine and of each account, with their keys' times
+juntei parse-registry -f SOFTWARE -k 'Microsoft\Windows\CurrentVersion\Group Policy\State' -t jsonl | jq .
+
+# A GPO by its GUID, in whatever case the hive has it
+juntei parse-registry -f SOFTWARE --value-data '31b2f340-016d-11d2-945f-00c04fb984f9' -t jsonl
+
+# The control set in use (SYSTEM\Select)
+juntei parse-registry -f SYSTEM -k Select -t jsonl | jq '{(.value_name): .value_data}'
+
+# Keys written in a time window
+juntei parse-registry -f NTUSER.DAT --timeline-start 2025-10-19 --timeline-end 2025-10-20 -o keys.csv
+```
+
+- One record per value (`RecordType` `value`), and one per key without values or with damage
+  (`key`), so every key's last-write time is there. CSV columns: `SourceFile`, `HiveType` (`SYSTEM`,
+  `NTUSER.DAT`, …: the name the hive's base block records, else the file's), `RecordType`, `KeyPath`
+  (under the hive's root key; empty for the root), `KeyLastWrittenUTC`, `ValueName` (empty for the
+  default value), `ValueType` (`REG_SZ`, `REG_MULTI_SZ`, `REG_DWORD`, `REG_QWORD`, `REG_BINARY`, …;
+  other types in hex), `ValueData`, `DataSize`, `ValueDataRaw`, `HiveDirty`, `LogsApplied`,
+  `ChangedByLogs` and `Problems`. JSON / JSONL have the same fields, the data typed: strings, an
+  array for a `REG_MULTI_SZ`, numbers for `REG_DWORD` and `REG_QWORD` (whole, past 2^53 too).
+- Strings are UTF-16 up to their NUL; a `REG_MULTI_SZ` is a list (a JSON array in its CSV cell); the
+  binary types are in hex. A value that doesn't decode as its type (a `REG_DWORD` of 3 bytes) or has
+  a type with no decoding keeps its bytes in `ValueDataRaw`, with the problem; `--raw-data` writes
+  every value's bytes.
+- Transaction logs: `<hive>.LOG`, `.LOG1` and `.LOG2` next to the hive are applied when it is dirty
+  (`--log` gives them by hand, `--no-logs` reads the hive as it is), with Yamato Security's
+  [ys-shimcache-parser](https://github.com/Yamato-Security/ys-shimcache-parser)'s replay.
+  `LogsApplied` names those applied; `ChangedByLogs` is `True` for a key or value that the hive
+  without its logs hasn't, or has with other data (a value) or another last-write time (a key). A
+  dirty hive without usable logs is reported in the summary: keys and values may be missing.
+- Filters: `-k` a key and the keys under it (its path may start with the hive's name,
+  `SOFTWARE\Microsoft\…`); `--key-regex`, `--value-name` and `--value-data`, regular expressions
+  ignoring case, so that a GUID matches whatever its case while the output keeps it as the hive has
+  it; `--timeline-start` and `--timeline-end` on the keys' last-write times.
+- With `-d`, every file that is a hive (the `regf` signature, the primary file type) is parsed,
+  whatever its name, but not the transaction logs; `SourceFile` tells the hosts apart.
+- Damaged or crafted hives do not stop the run: a key, value or list that can't be read is reported
+  (`Problems`, and in the summary) and its siblings are still read; a list that leads back to a key
+  already read is a problem, not a loop. Deleted keys and values (in free cells) are not recovered.
+
+Hives are read with Juntei's own reader; their transaction logs are replayed by
+[ys-shimcache-parser](https://github.com/Yamato-Security/ys-shimcache-parser), whose replay gives
+what [yarp](https://github.com/msuhanov/yarp) recovers, byte for byte, on the public dirty hives
+with logs. Read as they are, the test hives' keys and values equal regipy's, but where regipy cuts
+strings at 256 characters, leaves out values whose type it doesn't know, and gives device property
+types (`0xffff0012`) by their low 16 bits.
 
 ## License
 

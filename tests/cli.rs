@@ -3,7 +3,7 @@
 //! The expected counts are those of the `ys-amcache-parser` command, which was cross-validated
 //! against regipy and a second, independent Amcache parser (see `test_files/amcache/README.md`).
 
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -1335,12 +1335,13 @@ const SRUM_SERVER: &str = "test_files/srum/server2022_aptsimulatorvm_SRUDB.dat";
 /// The account most of the Windows 10 database's entries are for.
 const RATHBUN_SID: &str = "S-1-5-21-2290304894-658537038-505560459-1000";
 
-/// A registry key of the hives the SRUM tests build: its name, values (name, type, data) and
-/// subkeys.
+/// A registry key of the hives the SRUM and registry tests build: its name, values (name, type,
+/// data), subkeys and last-write time.
 struct RegKey {
     name: String,
     values: Vec<(String, u32, Vec<u8>)>,
     subkeys: Vec<RegKey>,
+    written: u64,
 }
 
 fn reg_key(name: &str, values: Vec<(&str, u32, Vec<u8>)>, subkeys: Vec<RegKey>) -> RegKey {
@@ -1351,12 +1352,24 @@ fn reg_key(name: &str, values: Vec<(&str, u32, Vec<u8>)>, subkeys: Vec<RegKey>) 
             .map(|(n, t, d)| (n.to_string(), t, d))
             .collect(),
         subkeys,
+        written: 0,
     }
 }
 
+impl RegKey {
+    /// Last written at `filetime`.
+    fn written(mut self, filetime: u64) -> Self {
+        self.written = filetime;
+        self
+    }
+}
+
+const REG_SZ: u32 = 1;
 const REG_EXPAND_SZ: u32 = 2;
 const REG_BINARY: u32 = 3;
 const REG_DWORD: u32 = 4;
+const REG_MULTI_SZ: u32 = 7;
+const REG_QWORD: u32 = 11;
 
 fn utf16z(s: &str) -> Vec<u8> {
     s.encode_utf16()
@@ -1385,6 +1398,7 @@ fn write_key(cells: &mut Vec<u8>, key: &RegKey, parent: u32, root: bool) -> u32 
     nk[0..2].copy_from_slice(b"nk");
     // KEY_COMP_NAME (an ASCII name), and for the root KEY_HIVE_ENTRY | KEY_NO_DELETE
     nk[2..4].copy_from_slice(&(if root { 0x2cu16 } else { 0x20 }).to_le_bytes());
+    nk[4..12].copy_from_slice(&key.written.to_le_bytes());
     put_u32(&mut nk, 16, parent);
     for unset in [28, 32, 40, 44, 48] {
         put_u32(&mut nk, unset, u32::MAX);
@@ -3225,4 +3239,565 @@ fn defender_quarantine_input_and_output_errors() {
     ]);
     assert_eq!(r.code, 1);
     assert!(r.stdout.contains("Could not parse"), "{}", r.stdout);
+}
+
+// --- parse-registry ----------------------------------------------------------------------------
+
+const AMCACHE_HIVE: &str = "test_files/amcache/amcache_win10.hve";
+/// `parse-registry`'s CSV columns.
+const REGISTRY_COLUMNS: [&str; 14] = [
+    "SourceFile",
+    "HiveType",
+    "RecordType",
+    "KeyPath",
+    "KeyLastWrittenUTC",
+    "ValueName",
+    "ValueType",
+    "ValueData",
+    "DataSize",
+    "ValueDataRaw",
+    "HiveDirty",
+    "LogsApplied",
+    "ChangedByLogs",
+    "Problems",
+];
+
+fn jsonl_records(text: &str) -> Vec<Value> {
+    text.lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect()
+}
+
+#[test]
+fn registry_every_key_and_value_of_a_hive() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("registry.csv");
+    let r = run(&[
+        "parse-registry",
+        "-f",
+        AMCACHE_HIVE,
+        "-o",
+        out.to_str().unwrap(),
+        "-K",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stdout);
+    for line in [
+        "Registry hives parsed: 1",
+        "Hive types: AMCACHE.HVE 1",
+        // the test hive was copied from a running system, without its logs
+        "Dirty hives whose transaction logs were not applied (keys or values may be missing): 1",
+        "Keys: 470, values: 10,942",
+        "Records: 10,944",
+        "Damaged keys and values: 0",
+    ] {
+        assert!(r.stdout.contains(line), "{line}\n{}", r.stdout);
+    }
+    let (header, rows) = csv_rows(&out);
+    assert_eq!(header, REGISTRY_COLUMNS);
+    assert_eq!(rows.len(), 10_944);
+    // the keys without values, with their last-write times
+    let keys: Vec<(&str, &str)> = rows
+        .iter()
+        .filter(|r| r["RecordType"] == "key")
+        .map(|r| (r["KeyPath"].as_str(), r["KeyLastWrittenUTC"].as_str()))
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            ("Root", "2022-03-10T20:12:08.418697200Z"),
+            (r"Root\DeviceCensus", "2022-03-10T16:34:26.058381300Z")
+        ]
+    );
+    let value = |key: &str, name: &str| {
+        rows.iter()
+            .find(|r| r["KeyPath"] == key && r["ValueName"] == name)
+            .unwrap()
+    };
+    let seven = r"Root\InventoryApplicationFile\7z.exe|afe683e0fa522625";
+    for (column, expected) in [
+        ("HiveType", "AMCACHE.HVE"),
+        ("RecordType", "value"),
+        ("KeyLastWrittenUTC", "2022-03-10T19:49:31.658344400Z"),
+        ("ValueType", "REG_SZ"),
+        ("ValueData", "igor pavlov"),
+        ("DataSize", "24"),
+        ("ValueDataRaw", ""),
+        ("HiveDirty", "True"),
+        ("LogsApplied", ""),
+        ("ChangedByLogs", ""),
+        ("Problems", ""),
+    ] {
+        assert_eq!(value(seven, "Publisher")[column], expected, "{column}");
+    }
+    assert_eq!(value(seven, "Size")["ValueType"], "REG_QWORD");
+    assert_eq!(value(seven, "Size")["ValueData"], "535040");
+    // the root key's own values: an empty path
+    assert_eq!(value("", "CreatingModule")["RecordType"], "value");
+
+    // JSON Lines, the same every time
+    let first = run(&["parse-registry", "-f", AMCACHE_HIVE, "-t", "jsonl"]);
+    let again = run(&["parse-registry", "-f", AMCACHE_HIVE, "-t", "jsonl"]);
+    assert_eq!(first.code, 0, "{}", first.stderr);
+    assert_eq!(first.stdout, again.stdout);
+    let records = jsonl_records(&first.stdout);
+    assert_eq!(records.len(), 10_944);
+    let find = |name: &str| {
+        records
+            .iter()
+            .find(|r| r["key_path"] == seven && r["value_name"] == name)
+            .unwrap()
+    };
+    assert_eq!(find("Publisher")["value_data"], "igor pavlov");
+    assert_eq!(find("Publisher")["changed_by_logs"], Value::Null);
+    assert_eq!(find("Size")["value_data"], 535_040);
+    assert_eq!(
+        find("Size")["key_last_written"],
+        "2022-03-10T19:49:31.658344400Z"
+    );
+}
+
+#[test]
+fn registry_dirty_hive_with_its_logs() {
+    let hive = system_hive();
+    let system = hive.path().join("HOST/C/Windows/System32/config/SYSTEM");
+    let system = system.to_str().unwrap();
+    // found under -d: the hive, not its logs
+    let r = run(&["parse-registry", "-d", hive.path().to_str().unwrap(), "-K"]);
+    assert_eq!(r.code, 0, "{}", r.stdout);
+    for line in [
+        "Registry hives: 1",
+        "Hive types: SYSTEM 1",
+        "Dirty hives recovered with their transaction logs: 1",
+        "Keys: 32,881, values: 75,061",
+        "Records: 81,006 (changed by the transaction logs: 241)",
+    ] {
+        assert!(r.stdout.contains(line), "{line}\n{}", r.stdout);
+    }
+    // the control sets Windows chose
+    let r = run(&[
+        "parse-registry",
+        "-f",
+        system,
+        "-k",
+        "Select",
+        "-t",
+        "jsonl",
+    ]);
+    let select: Vec<(String, u64)> = jsonl_records(&r.stdout)
+        .iter()
+        .map(|v| {
+            assert_eq!(v["value_type"], "REG_DWORD");
+            assert_eq!(v["changed_by_logs"], false);
+            assert_eq!(v["hive_dirty"], true);
+            assert_eq!(v["logs_applied"], json!(["SYSTEM.LOG1", "SYSTEM.LOG2"]));
+            (
+                v["value_name"].as_str().unwrap().to_string(),
+                v["value_data"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    let select: Vec<(&str, u64)> = select.iter().map(|(n, v)| (n.as_str(), *v)).collect();
+    assert_eq!(
+        select,
+        [
+            ("Current", 1),
+            ("Default", 1),
+            ("Failed", 0),
+            ("LastKnownGood", 1)
+        ]
+    );
+    // a value the logs changed, and the same without them
+    let secure_time = |extra: &[&str]| {
+        let mut args = vec![
+            "parse-registry",
+            "-f",
+            system,
+            "-k",
+            r"ControlSet001\Services\W32Time\SecureTimeLimits",
+            "--value-name",
+            "^SecureTimeEstimated$",
+            "-t",
+            "jsonl",
+        ];
+        args.extend(extra);
+        let records = jsonl_records(&run(&args).stdout);
+        assert_eq!(records.len(), 1);
+        records[0].clone()
+    };
+    let replayed = secure_time(&[]);
+    assert_eq!(replayed["value_type"], "REG_QWORD");
+    assert_eq!(replayed["value_data"], 132_891_424_373_386_666_u64);
+    assert_eq!(replayed["changed_by_logs"], true);
+    assert_eq!(replayed["key_last_written"], "2022-02-08T21:03:52.520572Z");
+    let as_it_is = secure_time(&["--no-logs"]);
+    assert_eq!(as_it_is["value_data"], 132_888_271_724_338_846_u64);
+    assert_eq!(as_it_is["changed_by_logs"], Value::Null);
+    assert_eq!(as_it_is["logs_applied"], json!([]));
+    assert_eq!(
+        as_it_is["key_last_written"],
+        "2022-02-08T20:52:54.093671200Z"
+    );
+    let r = run(&["parse-registry", "-f", system, "--no-logs", "-K"]);
+    for line in [
+        "Dirty hives whose transaction logs were not applied (keys or values may be missing): 1",
+        "Keys: 32,857, values: 74,907",
+    ] {
+        assert!(r.stdout.contains(line), "{line}\n{}", r.stdout);
+    }
+    // logs renamed in a collection, given by hand
+    let other = tempfile::tempdir().unwrap();
+    let config = hive.path().join("HOST/C/Windows/System32/config");
+    std::fs::copy(config.join("SYSTEM"), other.path().join("hive")).unwrap();
+    std::fs::copy(config.join("SYSTEM.LOG1"), other.path().join("first")).unwrap();
+    std::fs::copy(config.join("SYSTEM.LOG2"), other.path().join("second")).unwrap();
+    let path = |name: &str| other.path().join(name).to_str().unwrap().to_string();
+    let r = run(&[
+        "parse-registry",
+        "-f",
+        &path("hive"),
+        "--log",
+        &path("first"),
+        "--log",
+        &path("second"),
+        "-K",
+    ]);
+    for line in [
+        "Hive types: SYSTEM 1",
+        "Dirty hives recovered with their transaction logs: 1",
+        "Keys: 32,881, values: 75,061",
+    ] {
+        assert!(r.stdout.contains(line), "{line}\n{}", r.stdout);
+    }
+}
+
+/// A hive with a value of every common type, the default value, values that don't decode, a key
+/// without values, and a damaged value and subkey (their signatures broken).
+fn types_hive() -> Vec<u8> {
+    let values = reg_key(
+        "Values",
+        vec![
+            ("", REG_SZ, utf16z("the default")),
+            ("Sz", REG_SZ, utf16z("text")),
+            ("Expand", REG_EXPAND_SZ, utf16z("%SystemRoot%")),
+            ("Multi", REG_MULTI_SZ, utf16z("a\0b c\0")),
+            ("Dword", REG_DWORD, 7u32.to_le_bytes().to_vec()),
+            ("Qword", REG_QWORD, u64::MAX.to_le_bytes().to_vec()),
+            ("Binary", REG_BINARY, vec![0xde, 0xad]),
+            ("ShortDword", REG_DWORD, vec![1, 2, 3]),
+            ("Unknown", 0x0020_0000, vec![1, 2, 3, 4, 5]),
+            ("BadValue", REG_DWORD, 9u32.to_le_bytes().to_vec()),
+        ],
+        Vec::new(),
+    );
+    let root = reg_key(
+        "ROOT",
+        Vec::new(),
+        vec![
+            values,
+            reg_key("Empty", Vec::new(), Vec::new()),
+            reg_key("BadKey", vec![("Lost", REG_DWORD, vec![0; 4])], Vec::new()),
+            reg_key("GoodKey", vec![("Kept", REG_SZ, utf16z("yes"))], Vec::new()),
+        ],
+    );
+    let mut hive = regf(&root);
+    // a value cell starts 20 bytes before its name, a key cell 76
+    for (name, before) in [(&b"BadValue"[..], 20), (b"BadKey", 76)] {
+        let at = hive.windows(name.len()).position(|w| w == name).unwrap();
+        hive[at - before..at - before + 2].copy_from_slice(b"xx");
+    }
+    hive
+}
+
+#[test]
+fn registry_value_types_and_damage() {
+    let dir = tempfile::tempdir().unwrap();
+    let hive = dir.path().join("SOFTWARE");
+    std::fs::write(&hive, types_hive()).unwrap();
+    let out = dir.path().join("registry.csv");
+    let r = run(&[
+        "parse-registry",
+        "-f",
+        hive.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "-K",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stdout);
+    assert!(
+        r.stdout.contains("Damaged keys and values: 3"),
+        "{}",
+        r.stdout
+    );
+    let (_, rows) = csv_rows(&out);
+    let row = |key: &str, name: &str, kind: &str| {
+        rows.iter()
+            .find(|r| r["KeyPath"] == key && r["ValueName"] == name && r["RecordType"] == kind)
+            .unwrap_or_else(|| panic!("{key} {name} {kind}"))
+    };
+    for (name, kind, data) in [
+        ("", "REG_SZ", "the default"),
+        ("Sz", "REG_SZ", "text"),
+        ("Expand", "REG_EXPAND_SZ", "%SystemRoot%"),
+        ("Multi", "REG_MULTI_SZ", r#"["a","b c"]"#),
+        ("Dword", "REG_DWORD", "7"),
+        ("Qword", "REG_QWORD", "18446744073709551615"),
+        ("Binary", "REG_BINARY", "dead"),
+    ] {
+        let r = row("Values", name, "value");
+        assert_eq!(
+            (r["ValueType"].as_str(), r["ValueData"].as_str()),
+            (kind, data)
+        );
+        assert_eq!(r["ValueDataRaw"], "", "{name}");
+        assert_eq!(r["Problems"], "", "{name}");
+    }
+    // what doesn't decode keeps its bytes
+    let short = row("Values", "ShortDword", "value");
+    assert_eq!(short["ValueData"], "");
+    assert_eq!(short["ValueDataRaw"], "010203");
+    assert_eq!(short["Problems"], "REG_DWORD of 3 bytes");
+    let unknown = row("Values", "Unknown", "value");
+    assert_eq!(unknown["ValueType"], "0x200000");
+    assert_eq!(unknown["ValueDataRaw"], "0102030405");
+    assert_eq!(unknown["Problems"], "");
+    // a damaged value and a damaged subkey are reported, and the rest is still read
+    assert!(!rows.iter().any(|r| r["ValueName"] == "BadValue"));
+    assert!(row("Values", "", "key")["Problems"].starts_with("a value: cell 0x"));
+    assert!(row("", "", "key")["Problems"].starts_with("a subkey: cell 0x"));
+    assert!(!rows.iter().any(|r| r["ValueName"] == "Lost"));
+    assert_eq!(row("GoodKey", "Kept", "value")["ValueData"], "yes");
+    assert_eq!(row("Empty", "", "key")["Problems"], "");
+
+    // in JSON: typed, and every value's bytes with --raw-data
+    let r = run(&[
+        "parse-registry",
+        "-f",
+        hive.to_str().unwrap(),
+        "-k",
+        "Values",
+        "--raw-data",
+        "-t",
+        "jsonl",
+    ]);
+    let records = jsonl_records(&r.stdout);
+    let find = |name: &str| {
+        records
+            .iter()
+            .find(|r| r["value_name"] == name && r["record_type"] == "value")
+            .unwrap()
+    };
+    assert_eq!(find("Multi")["value_data"], json!(["a", "b c"]));
+    assert_eq!(find("Qword")["value_data"], json!(u64::MAX));
+    assert_eq!(find("Dword")["value_data_raw"], "07000000");
+    assert_eq!(find("ShortDword")["value_data"], Value::Null);
+    assert_eq!(
+        find("ShortDword")["problems"],
+        json!(["REG_DWORD of 3 bytes"])
+    );
+    assert_eq!(find("")["value_data"], "the default");
+}
+
+/// 2022-02-08T21:03:52Z and a day after, as FILETIMEs.
+const LINKED: u64 = 132_888_278_320_000_000;
+const DAY: u64 = 864_000_000_000;
+
+/// A SOFTWARE hive with Group Policy's state: the machine's and an account's GPO links, the
+/// default domain policy's GUID in upper case for the machine and in lower case for the account.
+fn group_policy_hive() -> Vec<u8> {
+    let link = |n: &str, written: u64, guid: &str| {
+        reg_key(
+            n,
+            vec![
+                (
+                    "DsPath",
+                    REG_SZ,
+                    utf16z(&format!(
+                        "LDAP://cn={guid},cn=policies,cn=system,DC=corp,DC=example"
+                    )),
+                ),
+                ("Options", REG_DWORD, 0u32.to_le_bytes().to_vec()),
+            ],
+            Vec::new(),
+        )
+        .written(written)
+    };
+    let machine = reg_key(
+        "Machine",
+        Vec::new(),
+        vec![reg_key(
+            "GPLink-List",
+            Vec::new(),
+            vec![
+                link("0", LINKED, "{31B2F340-016D-11D2-945F-00C04FB984F9}"),
+                link("1", LINKED + DAY, "{6AC1786C-016F-11D2-945F-00C04FB984F9}"),
+            ],
+        )],
+    );
+    let account = reg_key(
+        "S-1-5-21-1-2-3-1001",
+        Vec::new(),
+        vec![reg_key(
+            "GPLink-List",
+            Vec::new(),
+            vec![link("0", LINKED, "{31b2f340-016d-11d2-945f-00c04fb984f9}")],
+        )],
+    );
+    let state = reg_key("State", Vec::new(), vec![machine, account]);
+    let mut key = state;
+    for name in ["Group Policy", "CurrentVersion", "Windows", "Microsoft"] {
+        key = reg_key(name, Vec::new(), vec![key]);
+    }
+    regf(&reg_key("ROOT", Vec::new(), vec![key]))
+}
+
+#[test]
+fn registry_group_policy_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let hive = dir.path().join("SOFTWARE");
+    std::fs::write(&hive, group_policy_hive()).unwrap();
+    let hive = hive.to_str().unwrap();
+    let state = r"Microsoft\Windows\CurrentVersion\Group Policy\State";
+    let query = |extra: &[&str]| {
+        let mut args = vec!["parse-registry", "-f", hive, "-t", "jsonl"];
+        args.extend(extra);
+        let r = run(&args);
+        assert_eq!(r.code, 0, "{}", r.stderr);
+        jsonl_records(&r.stdout)
+    };
+    // the state's keys, the path also given with the hive's name
+    let links = query(&[
+        "-k",
+        &format!(r"SOFTWARE\{state}"),
+        "--value-name",
+        "^DsPath$",
+    ]);
+    let paths: Vec<&str> = links
+        .iter()
+        .map(|r| r["key_path"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            format!(r"{state}\Machine\GPLink-List\0"),
+            format!(r"{state}\Machine\GPLink-List\1"),
+            format!(r"{state}\S-1-5-21-1-2-3-1001\GPLink-List\0"),
+        ]
+    );
+    assert_eq!(links[0]["hive_type"], "SOFTWARE");
+    assert_eq!(links[0]["key_last_written"], "2022-02-08T21:03:52Z");
+    assert_eq!(links[1]["key_last_written"], "2022-02-09T21:03:52Z");
+    // a GUID matches in any case; the evidence keeps its own
+    let default_policy = query(&["--value-data", "31b2f340-016d-11d2-945f-00c04fb984f9"]);
+    let found: Vec<&str> = default_policy
+        .iter()
+        .map(|r| r["value_data"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        found,
+        [
+            "LDAP://cn={31B2F340-016D-11D2-945F-00C04FB984F9},cn=policies,cn=system,DC=corp,DC=example",
+            "LDAP://cn={31b2f340-016d-11d2-945f-00c04fb984f9},cn=policies,cn=system,DC=corp,DC=example",
+        ]
+    );
+    // the numbered links last written on the second day
+    let later = query(&[
+        "--key-regex",
+        r"GPLink-List\\\d+$",
+        "--timeline-start",
+        "2022-02-09",
+        "--timeline-end",
+        "2022-02-09T23:59:59Z",
+    ]);
+    assert_eq!(later.len(), 2);
+    assert!(
+        later
+            .iter()
+            .all(|r| r["key_path"] == format!(r"{state}\Machine\GPLink-List\1"))
+    );
+    // a key the hive hasn't
+    let r = run(&["parse-registry", "-f", hive, "-k", "Policies", "-K"]);
+    assert!(
+        r.stdout.contains("Hives without the key of --key: 1"),
+        "{}",
+        r.stdout
+    );
+}
+
+#[test]
+fn registry_triage_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    for host in ["HOST1", "HOST2"] {
+        let programs = dir.path().join(host).join("C/Windows/AppCompat/Programs");
+        std::fs::create_dir_all(&programs).unwrap();
+        std::fs::copy(repo(AMCACHE_HIVE), programs.join("Amcache.hve")).unwrap();
+        std::fs::write(programs.join("notes.txt"), b"not a hive").unwrap();
+    }
+    let out = dir.path().join("registry.csv");
+    let r = run(&[
+        "parse-registry",
+        "-d",
+        dir.path().to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "-K",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stdout);
+    for line in [
+        "Registry hives: 2",
+        "Hive types: AMCACHE.HVE 2",
+        "Records: 21,888",
+    ] {
+        assert!(r.stdout.contains(line), "{line}\n{}", r.stdout);
+    }
+    let (_, rows) = csv_rows(&out);
+    for host in ["HOST1", "HOST2"] {
+        let of_host = rows
+            .iter()
+            .filter(|r| Path::new(&r["SourceFile"]).starts_with(dir.path().join(host)))
+            .count();
+        assert_eq!(of_host, 10_944, "{host}");
+    }
+}
+
+#[test]
+fn registry_input_and_output_errors() {
+    let r = run(&["parse-registry", "-f", "test_files/missing", "-K"]);
+    assert_eq!(r.code, 1);
+    assert!(r.stdout.contains("The file does not exist"), "{}", r.stdout);
+    let r = run(&["parse-registry", "-f", "test_files/lnk/README.md", "-K"]);
+    assert_eq!(r.code, 1);
+    assert!(
+        r.stdout.contains("Could not parse") && r.stdout.contains("not a registry hive"),
+        "{}",
+        r.stdout
+    );
+    let r = run(&["parse-registry", "-d", "test_files/lnk", "-K"]);
+    assert_eq!(r.code, 1);
+    assert!(r.stdout.contains("No registry hives"), "{}", r.stdout);
+    let r = run(&[
+        "parse-registry",
+        "-f",
+        AMCACHE_HIVE,
+        "--key-regex",
+        "(",
+        "-K",
+    ]);
+    assert_eq!(r.code, 1);
+    assert!(r.stdout.contains("--key-regex: "), "{}", r.stdout);
+    let r = run(&["parse-registry", "-d", "test_files", "--log", AMCACHE_HIVE]);
+    assert_ne!(r.code, 0, "--log needs -f");
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("keep.csv");
+    std::fs::write(&file, b"keep").unwrap();
+    let r = run(&[
+        "parse-registry",
+        "-f",
+        AMCACHE_HIVE,
+        "-o",
+        file.to_str().unwrap(),
+        "-K",
+    ]);
+    assert_eq!(r.code, 1);
+    assert!(r.stdout.contains("already exists"), "{}", r.stdout);
+    assert_eq!(std::fs::read(&file).unwrap(), b"keep");
 }
